@@ -4,3 +4,5 @@ __pycache__/
 *.csv       # 忽略所有表格数据
 *.xlsx      # 忽略所有 Excel 文件
 *.json      # 视情况而定，如果包含敏感数据也要忽略
+db/
+*.pyc
