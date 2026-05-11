@@ -1,5 +1,14 @@
 # main.py
+import logging
 import os
+
+import gradio as gr
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 # 这一句会自动触发 engine.py 里的模型加载，并把搭好的网页拿过来
 from ui.app import demo
@@ -11,4 +20,9 @@ if __name__ == "__main__":
         os.makedirs("./outputs")
 
     # 启动！(正式摆脱 Jupyter)
-    demo.queue().launch(server_name="0.0.0.0", server_port=7860, share=False)
+    demo.queue().launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=False,
+        theme=gr.themes.Soft(),
+    )

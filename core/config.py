@@ -20,5 +20,8 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 # 4. 测试集输入路径（testdata 文件夹）
 TESTDATA_DIR = os.path.join(BASE_DIR, "testdata")
 
-# 5. 模型路径
-MODEL_PATH = r"/root/DATA_COMPLIANCE_RAG/sentence-transformer"
+# 5. 模型路径 (优先从环境变量读取，兼容 Windows / Linux 不同部署环境)
+MODEL_PATH = os.getenv(
+    "SENTENCE_TRANSFORMER_PATH",
+    r"G:\AI_Models\sentence-transformer",
+)

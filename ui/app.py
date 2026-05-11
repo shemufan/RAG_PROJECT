@@ -4,7 +4,7 @@ import gradio as gr
 from core.engine import update_knowledge_base, smart_predict
 from core.evaluator import load_error_log, batch_evaluate
 
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
+with gr.Blocks() as demo:
     gr.Markdown("# 🛡️ 智能合规定级引擎 (含人工干预与动态学习)")
 
     # "错题本"和"知识库更新" 并排放在网页顶部

@@ -1,13 +1,17 @@
 # core/evaluator.py
-import pandas as pd
-from core.config import OUTPUT_DIR
+import logging
 import os
-import gradio as gr
 import traceback
+
+import gradio as gr
+import pandas as pd
 from sklearn.metrics import accuracy_score, classification_report
 
-from core.engine import smart_predict
-import core.engine as engine_module
+from core.config import OUTPUT_DIR
+
+logger = logging.getLogger(__name__)
+
+from core.engine import smart_predict, set_error_log_cache
 
 
 def load_error_log(file_obj):
@@ -20,8 +24,9 @@ def load_error_log(file_obj):
             if file_obj.name.endswith(".xlsx")
             else pd.read_csv(file_obj.name)
         )
-        engine_module.ERROR_LOG_CACHE = dict(zip(df["name"], df["标准答案"]))
-        return f"错题集加载成功！已激活 {len(engine_module.ERROR_LOG_CACHE)} 条强制拦截规则。"
+        cache = dict(zip(df["name"], df["标准答案"]))
+        set_error_log_cache(cache)
+        return f"错题集加载成功！已激活 {len(cache)} 条强制拦截规则。"
     except Exception as e:
         return f"格式有误: {str(e)}"
 
@@ -34,19 +39,19 @@ def batch_evaluate(file_obj, progress=gr.Progress()):
         yield log_content, "处理中...", None
 
         # debug1 - 验证函数入口
-        print("\n---  开始执行批量评测任务 ---")
+        logger.info("开始执行批量评测任务")
         if file_obj is None:
             return "请先上传测试集", None
 
         # debug2 - 验证文件格式
-        print(f" 正在读取文件: {file_obj.name}")
+        logger.info("正在读取文件: %s", file_obj.name)
         if file_obj.name.endswith(".xlsx") or file_obj.name.endswith(".xls"):
             df = pd.read_excel(file_obj.name)
         else:
             df = pd.read_csv(file_obj.name)
 
         # debug3 - 验证表格结构
-        print(f" 读取成功！当前表格的列名有: {list(df.columns)}")
+        logger.debug("读取成功！当前表格的列名有: %s", list(df.columns))
         required_columns = ["英文名", "中文名", "业务描述", "标准答案"]
         for col in required_columns:
             if col not in df.columns:
@@ -60,9 +65,9 @@ def batch_evaluate(file_obj, progress=gr.Progress()):
         yield log_content, "推理中...", None
 
         # debug4 - 验证循环逻辑
-        print(f" 开始遍历 {len(df)} 条数据，准备调用大模型...")
+        logger.info("开始遍历 %d 条数据，准备调用大模型...", len(df))
         for index, row in progress.tqdm(df.iterrows(), total=len(df), desc="智能定级推演中"):
-            print(f"   -> 正在推演第 {index + 1} 条数据: {row['英文名']}")
+            logger.debug("正在推演第 %d 条数据: %s", index + 1, row["英文名"])
             lvl, rsn, ctx = smart_predict(row["英文名"], row["中文名"], row["业务描述"])
             predictions.append(lvl)
             reasons.append(rsn)
@@ -78,7 +83,7 @@ def batch_evaluate(file_obj, progress=gr.Progress()):
         yield log_content, "结算中...", None
 
         # debug5 - 验证结果处理
-        print(" 大模型推理全部完成，正在计算准确率...")
+        logger.info("大模型推理全部完成，正在计算准确率...")
         df["大模型结论"] = predictions
         df["大模型理由"] = reasons
         df["检索到的法律依据"] = contexts
@@ -91,7 +96,7 @@ def batch_evaluate(file_obj, progress=gr.Progress()):
         l4_recall = report_dict.get("L4", {}).get("recall", 0)
 
         # debug6 - 验证结果导出(检索信息和错题本)
-        print(" 正在生成多维度评测报告...")
+        logger.info("正在生成多维度评测报告...")
 
         # 1. 准备错题集
         bad_cases_df = df[df["标准答案"] != df["大模型结论"]]
@@ -135,4 +140,3 @@ def batch_evaluate(file_obj, progress=gr.Progress()):
         # 在 Gradio 网页右上角弹出一个红色的报错提示框
         yield log_content + error_msg, "系统崩溃", None
         raise gr.Error(f"系统崩溃了！原因：{str(e)}")
-    pass
