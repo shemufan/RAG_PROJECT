@@ -15,7 +15,16 @@ from core.engine import smart_predict, set_error_log_cache
 
 
 def load_error_log(file_obj):
-    # 修改 ERROR_LOG_CACHE
+    """加载错题本文件，将字段名→标准答案映射写入全局拦截缓存。
+
+    支持 .xlsx 和 .csv 两种格式，表格必须包含「name」列（字段英文名）和「标准答案」列（L1-L4）。
+
+    Args:
+        file_obj: Gradio File 组件上传的文件对象，含 .name 属性。
+
+    Returns:
+        str: 给前端的加载状态提示。
+    """
     if file_obj is None:
         return "未上传文件。"
     try:
@@ -32,6 +41,27 @@ def load_error_log(file_obj):
 
 
 def batch_evaluate(file_obj, progress=gr.Progress()):
+    """批量评测主流程：逐行调用大模型推理 → 计算指标 → 导出多 Sheet Excel 报告。
+
+    这是一个 Gradio 生成器函数，通过 yield 向 Web 界面实时推送处理进度和日志。
+
+    测试集要求：Excel 或 CSV，列名必须为「英文名」「中文名」「业务描述」「标准答案」。
+
+    输出 Excel 包含三个 Sheet：
+        - 全量评测记录：每条字段的判定结果 + 推理理由 + 检索法律依据
+        - 错题核查清单：大模型结论与标准答案不一致的条目
+        - 量化评估指标：整体准确率 + 各级别精确率/召回率/F1
+
+    Args:
+        file_obj: Gradio File 组件上传的测试集文件对象。
+        progress: Gradio Progress 组件，用于 tqdm 进度条。
+
+    Yields:
+        tuple: (log_content, metrics_summary, report_path)
+            - log_content:      实时处理控制台的累积日志文本
+            - metrics_summary:  准确率与 L4 召回率的摘要文字
+            - report_path:      生成的全量评测报告 Excel 文件的本地路径
+    """
     try:
         # 定义log_content专门用来存实时日志
         log_content = " 开始执行批量评测任务...\n"

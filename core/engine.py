@@ -41,12 +41,25 @@ ERROR_LOG_CACHE = {}
 
 
 def set_error_log_cache(cache: dict):
-    """安全写入错题本缓存，避免跨模块直接操作全局变量。"""
+    """安全写入错题本缓存，避免跨模块直接操作全局变量。
+
+    Args:
+        cache: 字段英文名 → 标准答案级别的映射字典，如 {"salary": "L3", "account_code": "L2"}
+    """
     ERROR_LOG_CACHE.clear()
     ERROR_LOG_CACHE.update(cache)
 
 
 def update_knowledge_base(file_objs):
+    """增量更新 Chroma 向量知识库：将上传的法规 txt 切分后写入并持久化。
+
+    Args:
+        file_objs: Gradio File 组件传入的文件对象列表，每个文件对象含 .name 属性指向临时路径，
+                   文件需为 UTF-8 编码的纯文本。
+
+    Returns:
+        str: 给前端的提示信息，含新增知识区块数量或失败原因。
+    """
     if not file_objs:
         return " 未选择文件。"
     try:
@@ -65,6 +78,26 @@ def update_knowledge_base(file_objs):
 
 
 def smart_predict(field_en, field_cn, desc):
+    """对单个业务字段进行合规定级（RAG 检索 + LLM 推理）。
+
+    执行流程：
+        1. 检查错题本缓存，命中则直接返回预设级别；
+        2. 检查知识库是否为空，空则返回提示；
+        3. 以「中文名 + 业务描述」拼接查询语句，在 Chroma 中相似度检索 Top 3；
+        4. 将法律依据与字段信息填入 CoT Prompt，调用 DeepSeek 大模型推理；
+        5. 用正则从模型回复中提取「最终定级：LX」或末次出现的 L1-L4。
+
+    Args:
+        field_en: 字段英文名，同时作为错题本缓存的 key。
+        field_cn: 字段中文名，参与向量检索查询拼接。
+        desc:   业务描述，补充字段语义上下文。
+
+    Returns:
+        tuple: (level, reason, context)
+            - level:   判定级别，取值为 "L1"/"L2"/"L3"/"L4"/"未知"/"Error"
+            - reason:  大模型完整推理过程，或错题本命中/知识库为空/调用失败 的提示
+            - context: 检索到的 Top 3 法律依据原文（带编号），或对应状态的占位提示
+    """
     if field_en in ERROR_LOG_CACHE:
         return (
             ERROR_LOG_CACHE[field_en],

@@ -19,7 +19,7 @@ if __name__ == "__main__":
     if not os.path.exists("./outputs"):
         os.makedirs("./outputs")
 
-    # 启动！(正式摆脱 Jupyter)
+    # 启动
     demo.queue().launch(
         server_name="0.0.0.0",
         server_port=7860,

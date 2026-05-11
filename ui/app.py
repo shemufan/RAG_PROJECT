@@ -47,7 +47,7 @@ with gr.Blocks() as demo:
                     test_file = gr.File(label="上传测试集 (.xlsx )")
                     btn_batch = gr.Button("🔥 启动批量评测", variant="primary")
 
-                # 🌟 新增的右侧“运行监控屏幕”
+                # 🌟 右侧“运行监控屏幕”
                 with gr.Column(scale=2):
                     out_log = gr.Textbox(
                         label=" 实时处理控制台", lines=12, max_lines=15, interactive=False
