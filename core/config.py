@@ -2,26 +2,21 @@
 import os
 from dotenv import load_dotenv
 
-# 加载根目录的 api_key.env
 load_dotenv("api_key.env", override=True)
 
-# 定义所有绝对路径或相对路径
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 1. 数据库路径（Chroma 文件夹）
-DB_PATH = os.path.join(BASE_DIR, "db")
+DB_PATH = os.getenv("CHROMA_DB_PATH", os.path.join(BASE_DIR, "db"))
+DATA_DIR = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", os.path.join(BASE_DIR, "outputs"))
+TESTDATA_DIR = os.getenv("TESTDATA_DIR", os.path.join(BASE_DIR, "testdata"))
 
-# 2. 知识库原文路径（data 文件夹）
-DATA_DIR = os.path.join(BASE_DIR, "data")
-
-# 3. 输出报告路径（outputs 文件夹）
-OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
-
-# 4. 测试集输入路径（testdata 文件夹）
-TESTDATA_DIR = os.path.join(BASE_DIR, "testdata")
-
-# 5. 模型路径 (优先从环境变量读取，兼容 Windows / Linux 不同部署环境)
 MODEL_PATH = os.getenv(
-    "SENTENCE_TRANSFORMER_PATH",
-    r"G:\AI_Models\sentence-transformer",
+    "EMBEDDING_MODEL_PATH", os.path.join(BASE_DIR, "models", "sentence-transformer")
 )
+
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "")

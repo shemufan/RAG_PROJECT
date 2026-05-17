@@ -2,6 +2,10 @@
 import logging
 import os
 import re
+import json
+from core.schemas import FieldProfile, Evidence, ClassificationResult
+from core.prompt import CLASSIFICATION_PROMPT
+from knowledge.chunker import split_by_article
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +18,61 @@ from core.config import MODEL_PATH, DB_PATH  # 引入刚才定义的配置
 
 logger.info("正在加载本地知识库与模型，请稍候...")
 
+
+# 解析JSON
+def parse_llm_json_response(response: str) -> dict:
+    """
+    尽量从 LLM 输出中解析 JSON。
+    即使模型误包了 Markdown，也尽量提取。
+    """
+    try:
+        return json.loads(response)
+    except Exception:
+        pass
+
+    match = re.search(r"\{.*\}", response, re.DOTALL)
+    if match:
+        return json.loads(match.group(0))
+
+    raise ValueError(f"无法解析 LLM JSON 输出: {response}")
+
+
+def build_search_query(field: FieldProfile) -> str:
+    return f"""
+字段名：{field.field_name}
+中文名：{field.field_cn or ""}
+字段注释：{field.field_comment or ""}
+字段类型：{field.data_type or ""}
+表名：{field.table_name or ""}
+样例值：{", ".join(field.sample_values[:5])}
+业务域：{field.business_domain}
+"""
+
+
+def retrieve_evidence(field: FieldProfile, k: int = 3) -> list[Evidence]:
+    query = build_search_query(field)
+
+    # Layer1 阶段先不用复杂过滤，后续可加 where
+    docs = vector_db.similarity_search(query, k=k)
+
+    evidence_list = []
+    for idx, doc in enumerate(docs):
+        metadata = doc.metadata or {}
+        evidence_list.append(
+            Evidence(
+                document_name=metadata.get("document_name", "未知文档"),
+                source_type=metadata.get("source_type", "unknown"),
+                domain=metadata.get("domain", "general"),
+                hierarchy_level=metadata.get("hierarchy_level"),
+                content=doc.page_content,
+                score=None,
+                chunk_id=metadata.get("chunk_id", f"evidence_{idx+1}"),
+            )
+        )
+
+    return evidence_list
+
+
 # 1. 全局初始化 (只会在 main.py 启动时执行一次)
 embeddings = HuggingFaceEmbeddings(model_name=MODEL_PATH, model_kwargs={"local_files_only": True})
 vector_db = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
@@ -22,20 +81,6 @@ llm = ChatOpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url=os.getenv("DEEPSEEK_BASE_URL"),
 )
-
-prompt_template = PromptTemplate(
-    input_variables=["context", "field_en", "field_cn", "desc"],
-    template="""你是一个数据合规专家。请根据以下法律条文：
-    {context}
-
-    分析以下业务字段：
-    英文名：{field_en}
-    中文名：{field_cn}
-    描述：{desc}
-
-    请严格按照 Step 1, Step 2, Step 3 进行分析，并在最后一行以「最终定级：LX」的格式明确输出级别（L1/L2/L3/L4 四选一）。""",
-)
-
 # 跨模块共享变量（通过 set_error_log_cache 写入，禁止外部直接修改）
 ERROR_LOG_CACHE = {}
 
@@ -51,96 +96,99 @@ def set_error_log_cache(cache: dict):
 
 
 def update_knowledge_base(file_objs):
-    """增量更新 Chroma 向量知识库：将上传的法规 txt 切分后写入并持久化。
-
-    Args:
-        file_objs: Gradio File 组件传入的文件对象列表，每个文件对象含 .name 属性指向临时路径，
-                   文件需为 UTF-8 编码的纯文本。
-
-    Returns:
-        str: 给前端的提示信息，含新增知识区块数量或失败原因。
-    """
     if not file_objs:
         return " 未选择文件。"
     try:
         total_chunks = 0
+
         for file_obj in file_objs:
+            file_name = os.path.basename(file_obj.name)
+
             with open(file_obj.name, "r", encoding="utf-8", errors="ignore") as f:
                 text = f.read()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-            chunks = text_splitter.create_documents([text])
+
+            # text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+            chunks = split_by_article(
+                text=text, document_name=file_name, source_type="enterprise_rule", domain="general"
+            )
+
             vector_db.add_documents(chunks)
             total_chunks += len(chunks)
+
         vector_db.persist()
         return f" 知识库更新成功！新增 {total_chunks} 个知识区块并已持久化到本地。"
+
     except Exception as e:
         return f" 更新失败：{str(e)}"
 
 
-def smart_predict(field_en, field_cn, desc):
-    """对单个业务字段进行合规定级（RAG 检索 + LLM 推理）。
+def classify_field(field: FieldProfile) -> ClassificationResult:
 
-    执行流程：
-        1. 检查错题本缓存，命中则直接返回预设级别；
-        2. 检查知识库是否为空，空则返回提示；
-        3. 以「中文名 + 业务描述」拼接查询语句，在 Chroma 中相似度检索 Top 3；
-        4. 将法律依据与字段信息填入 CoT Prompt，调用 DeepSeek 大模型推理；
-        5. 用正则从模型回复中提取「最终定级：LX」或末次出现的 L1-L4。
+    evidence_list = retrieve_evidence(field, k=3)
 
-    Args:
-        field_en: 字段英文名，同时作为错题本缓存的 key。
-        field_cn: 字段中文名，参与向量检索查询拼接。
-        desc:   业务描述，补充字段语义上下文。
-
-    Returns:
-        tuple: (level, reason, context)
-            - level:   判定级别，取值为 "L1"/"L2"/"L3"/"L4"/"未知"/"Error"
-            - reason:  大模型完整推理过程，或错题本命中/知识库为空/调用失败 的提示
-            - context: 检索到的 Top 3 法律依据原文（带编号），或对应状态的占位提示
-    """
-    if field_en in ERROR_LOG_CACHE:
-        return (
-            ERROR_LOG_CACHE[field_en],
-            "🎯 [人工干预] 触发错题本强规则拦截，跳过大模型。",
-            "⚠️ 命中强制拦截规则，无需检索法律依据。",
-        )
-
-    if vector_db._collection.count() == 0:
-        return "未知", "⚠️ 知识库为空，请先上传法规文本初始化知识库。", "知识库中无任何法律依据。"
-
-    search_query = f"{field_cn} {desc}"
-    docs = vector_db.similarity_search(search_query, k=3)  # 从知识库中选取3条最相关的依据
-
-    context_list = []
-    for i, doc in enumerate(docs):
-        context_list.append(f"【依据 {i+1}】: {doc.page_content}")
-    retrieved_context_all = "\n\n".join(context_list)
-
-    retrieved_context = "\n".join([doc.page_content for doc in docs])
-
-    final_prompt = prompt_template.format(
-        context=retrieved_context, field_en=field_en, field_cn=field_cn, desc=desc
+    field_profile_json = field.model_dump_json(ensure_ascii=False, indent=2)
+    evidence_json = json.dumps(
+        [e.model_dump() for e in evidence_list], ensure_ascii=False, indent=2
     )
 
+    final_prompt = CLASSIFICATION_PROMPT.format(
+        field_profile=field_profile_json, evidence=evidence_json
+    )
+
+    response = llm.invoke(final_prompt).content
+
     try:
-        # 调用大模型
-        response = llm.invoke(final_prompt).content
+        parsed = parse_llm_json_response(response)
 
-        level = "未知"
-        # 优先匹配「最终定级：LX」格式，防止误匹配正文中的级别提及
-        m = re.search(r"最终定级[：:]\s*(L[1-4])", response)
-        if m:
-            level = m.group(1)
-        else:
-            # 回退：取全文最后一次出现的 L1-L4
-            matches = re.findall(r"\b(L[1-4])\b", response)
-            if matches:
-                level = matches[-1]
+        result = ClassificationResult(
+            field_name=field.field_name,
+            category=parsed.get("category", "未知"),
+            subcategory=parsed.get("subcategory"),
+            level=parsed.get("level", "未知"),
+            confidence=float(parsed.get("confidence", 0.0)),
+            reason=parsed.get("reason", ""),
+            evidence=evidence_list,
+            need_review=bool(parsed.get("need_review", False)),
+            decision_path="rag_llm",
+            raw_response=response,
+        )
+        return result
 
-        return (
-            level,
-            response,
-            retrieved_context_all,
-        )  # 返回级别和大模型的完整推理过程以及检索到的法律依据
     except Exception as e:
-        return "Error", f" 调用大模型出错: {str(e)}"
+        return ClassificationResult(
+            field_name=field.field_name,
+            category="未知",
+            level="未知",
+            confidence=0.0,
+            reason=f"LLM 输出解析失败: {str(e)}",
+            evidence=evidence_list,
+            need_review=True,
+            decision_path="rag_llm_error",
+            raw_response=response,
+        )
+
+
+def smart_predict(field_en, field_cn, desc):
+    field = FieldProfile(
+        field_name=field_en, field_cn=field_cn, field_comment=desc, business_domain="general"
+    )
+
+    result = classify_field(field)
+
+    evidence_text = "\n\n".join(
+        [
+            f"【依据 {i+1}】{e.document_name} {e.hierarchy_level or ''}\n{e.content}"
+            for i, e in enumerate(result.evidence)
+        ]
+    )
+
+    reason_text = f"""
+分类：{result.category}
+细分类：{result.subcategory}
+等级：{result.level}
+置信度：{result.confidence}
+是否复核：{result.need_review}
+理由：{result.reason}
+"""
+
+    return result.level, reason_text, evidence_text
