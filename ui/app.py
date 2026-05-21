@@ -2,7 +2,8 @@
 import gradio as gr
 
 from core.engine import update_knowledge_base, smart_predict
-from core.evaluator import load_error_log, batch_evaluate
+from core.evaluator import load_error_log, batch_evaluate, connect_and_scan_mysql, evaluate_mysql_fields
+from core.config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 
 with gr.Blocks() as demo:
     gr.Markdown("# 🛡️ 智能合规定级引擎 (含人工干预与动态学习)")
@@ -62,5 +63,41 @@ with gr.Blocks() as demo:
                 fn=batch_evaluate,
                 inputs=test_file,
                 outputs=[out_log, out_acc, out_bad_cases],
+                show_progress="hidden",
+            )
+
+        with gr.TabItem(" MySQL 数据源"):
+            gr.Markdown("连接 MySQL 数据库，自动扫描全部表结构并逐字段分类定级。")
+            with gr.Row():
+                mysql_host = gr.Textbox(label="主机", value="localhost")
+                mysql_port = gr.Number(label="端口", value=3306, precision=0)
+                mysql_user = gr.Textbox(label="用户名", value="root")
+                mysql_password = gr.Textbox(label="密码", type="password")
+                mysql_database = gr.Textbox(label="数据库名", placeholder="test_db")
+
+            with gr.Row():
+                btn_scan = gr.Button(" 连接并扫描", variant="secondary")
+                btn_mysql_run = gr.Button(" 一键分类全部字段", variant="primary")
+
+            mysql_scan_log = gr.Textbox(label="扫描结果", lines=8, interactive=False)
+
+            with gr.Row():
+                mysql_out_log = gr.Textbox(
+                    label="实时处理控制台", lines=10, max_lines=15, interactive=False
+                )
+            with gr.Row():
+                mysql_out_acc = gr.Textbox(label="量化指标", lines=2)
+                mysql_out_report = gr.File(label="下载评测报告")
+
+            btn_scan.click(
+                fn=lambda h, p, u, pw, db: connect_and_scan_mysql(h, int(p), u, pw, db)[1],
+                inputs=[mysql_host, mysql_port, mysql_user, mysql_password, mysql_database],
+                outputs=mysql_scan_log,
+            )
+
+            btn_mysql_run.click(
+                fn=evaluate_mysql_fields,
+                inputs=[mysql_host, mysql_port, mysql_user, mysql_password, mysql_database],
+                outputs=[mysql_out_log, mysql_out_acc, mysql_out_report],
                 show_progress="hidden",
             )

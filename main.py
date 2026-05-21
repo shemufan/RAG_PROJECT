@@ -14,14 +14,14 @@ logging.basicConfig(
 from ui.app import demo
 
 if __name__ == "__main__":
-    print("🚀 启动智能合规定级系统...")
+    print("启动智能合规定级系统...")
     # 检查并自动创建输出文件夹
     if not os.path.exists("./outputs"):
         os.makedirs("./outputs")
 
     # 启动
     demo.queue().launch(
-        server_name="0.0.0.0",
+        server_name="127.0.0.1",
         server_port=7860,
         share=False,
         theme=gr.themes.Soft(),

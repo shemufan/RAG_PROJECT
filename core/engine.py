@@ -1,40 +1,42 @@
 # core/engine.py
 import logging
 import os
-import re
 import json
-from core.schemas import FieldProfile, Evidence, ClassificationResult
-from core.prompt import CLASSIFICATION_PROMPT
+from core.schemas import FieldProfile, Evidence, ClassificationOutput, ClassificationResult
+from core.prompt import CLASSIFICATION_SYSTEM, CLASSIFICATION_USER
 from knowledge.chunker import split_by_article
 
 logger = logging.getLogger(__name__)
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import PromptTemplate
-from core.config import MODEL_PATH, DB_PATH  # 引入刚才定义的配置
+from langchain_core.messages import SystemMessage, HumanMessage
+from core.config import MODEL_PATH, DB_PATH
 
 logger.info("正在加载本地知识库与模型，请稍候...")
 
+# 1. 全局初始化 (只会在 main.py 启动时执行一次)
+embeddings = HuggingFaceEmbeddings(model_name=MODEL_PATH, model_kwargs={"local_files_only": True})
+vector_db = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
+llm = ChatOpenAI(
+    model="deepseek-chat",
+    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    base_url=os.getenv("DEEPSEEK_BASE_URL"),
+)
+structured_llm = llm.with_structured_output(ClassificationOutput, method="function_calling")
+# 跨模块共享变量（通过 set_error_log_cache 写入，禁止外部直接修改）
+ERROR_LOG_CACHE = {}
 
-# 解析JSON
-def parse_llm_json_response(response: str) -> dict:
+
+def set_error_log_cache(cache: dict):
+    """安全写入错题本缓存，避免跨模块直接操作全局变量。
+
+    Args:
+        cache: 字段英文名 → 标准答案级别的映射字典，如 {"salary": "L3", "account_code": "L2"}
     """
-    尽量从 LLM 输出中解析 JSON。
-    即使模型误包了 Markdown，也尽量提取。
-    """
-    try:
-        return json.loads(response)
-    except Exception:
-        pass
-
-    match = re.search(r"\{.*\}", response, re.DOTALL)
-    if match:
-        return json.loads(match.group(0))
-
-    raise ValueError(f"无法解析 LLM JSON 输出: {response}")
+    ERROR_LOG_CACHE.clear()
+    ERROR_LOG_CACHE.update(cache)
 
 
 def build_search_query(field: FieldProfile) -> str:
@@ -73,28 +75,6 @@ def retrieve_evidence(field: FieldProfile, k: int = 3) -> list[Evidence]:
     return evidence_list
 
 
-# 1. 全局初始化 (只会在 main.py 启动时执行一次)
-embeddings = HuggingFaceEmbeddings(model_name=MODEL_PATH, model_kwargs={"local_files_only": True})
-vector_db = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
-llm = ChatOpenAI(
-    model="deepseek-chat",
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url=os.getenv("DEEPSEEK_BASE_URL"),
-)
-# 跨模块共享变量（通过 set_error_log_cache 写入，禁止外部直接修改）
-ERROR_LOG_CACHE = {}
-
-
-def set_error_log_cache(cache: dict):
-    """安全写入错题本缓存，避免跨模块直接操作全局变量。
-
-    Args:
-        cache: 字段英文名 → 标准答案级别的映射字典，如 {"salary": "L3", "account_code": "L2"}
-    """
-    ERROR_LOG_CACHE.clear()
-    ERROR_LOG_CACHE.update(cache)
-
-
 def update_knowledge_base(file_objs):
     if not file_objs:
         return " 未选择文件。"
@@ -124,6 +104,22 @@ def update_knowledge_base(file_objs):
 
 def classify_field(field: FieldProfile) -> ClassificationResult:
 
+    # 先进性错题本拦截
+    if field.field_name in ERROR_LOG_CACHE:
+        forced_level = ERROR_LOG_CACHE[field.field_name]
+        return ClassificationResult(
+            field_name=field.field_name,
+            category="人工纠错规则",
+            subcategory="错题本强制拦截",
+            level=forced_level,
+            confidence=1.0,
+            reason="命中人工上传的错题本规则，跳过 RAG 和 LLM。",
+            evidence=[],
+            need_review=False,
+            decision_path="error_log_cache",
+            raw_response=None,
+        )
+
     evidence_list = retrieve_evidence(field, k=3)
 
     field_profile_json = field.model_dump_json(ensure_ascii=False, indent=2)
@@ -131,40 +127,41 @@ def classify_field(field: FieldProfile) -> ClassificationResult:
         [e.model_dump() for e in evidence_list], ensure_ascii=False, indent=2
     )
 
-    final_prompt = CLASSIFICATION_PROMPT.format(
+    user_message = CLASSIFICATION_USER.format(
         field_profile=field_profile_json, evidence=evidence_json
     )
 
-    response = llm.invoke(final_prompt).content
-
     try:
-        parsed = parse_llm_json_response(response)
+        output: ClassificationOutput = structured_llm.invoke([
+            SystemMessage(content=CLASSIFICATION_SYSTEM),
+            HumanMessage(content=user_message),
+        ])
 
-        result = ClassificationResult(
+        return ClassificationResult(
             field_name=field.field_name,
-            category=parsed.get("category", "未知"),
-            subcategory=parsed.get("subcategory"),
-            level=parsed.get("level", "未知"),
-            confidence=float(parsed.get("confidence", 0.0)),
-            reason=parsed.get("reason", ""),
+            category=output.category,
+            subcategory=output.subcategory,
+            level=output.level,
+            confidence=output.confidence,
+            reason=output.reason,
             evidence=evidence_list,
-            need_review=bool(parsed.get("need_review", False)),
+            need_review=output.need_review,
             decision_path="rag_llm",
-            raw_response=response,
+            raw_response=output.model_dump_json(ensure_ascii=False),
         )
-        return result
 
     except Exception as e:
+        logger.error("LLM 调用失败: %s", str(e))
         return ClassificationResult(
             field_name=field.field_name,
             category="未知",
             level="未知",
             confidence=0.0,
-            reason=f"LLM 输出解析失败: {str(e)}",
+            reason=f"LLM 调用失败: {str(e)}",
             evidence=evidence_list,
             need_review=True,
             decision_path="rag_llm_error",
-            raw_response=response,
+            raw_response=None,
         )
 
 
