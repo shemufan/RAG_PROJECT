@@ -1,0 +1,94 @@
+# backend/schemas/classify_schema.py
+
+# 定义结构化输出类型
+from pydantic import BaseModel, Field
+from typing import List, Optional, Literal
+
+
+class FieldProfile(BaseModel):
+    database_name: Optional[str] = None
+    table_name: Optional[str] = None
+    field_name: str
+    field_comment: Optional[str] = None
+    field_cn: Optional[str] = None
+    data_type: Optional[str] = None
+    sample_values: List[str] = Field(default_factory=list)
+    business_domain: str = "general"
+    source_system: Optional[str] = None
+
+
+class Evidence(BaseModel):
+    document_name: str
+    source_type: str = "unknown"
+    domain: str = "general"
+    hierarchy_level: Optional[str] = None
+    content: str
+    score: Optional[float] = None
+    chunk_id: Optional[str] = None
+
+
+class ClassificationOutput(BaseModel):
+    """LLM 结构化输出 — 仅包含分类判定本身，不包含系统侧附加信息。"""
+
+    category: str = Field(description="数据分类，必须从以下选一: 个人信息、敏感个人信息、财务数据、员工数据、业务经营数据、技术元数据、其他")
+    subcategory: Optional[str] = Field(default=None, description="细分类，如: 个人联系方式、身份标识信息、薪酬信息")
+    level: Literal["L1", "L2", "L3", "L4"] = Field(description="敏感等级，L1=公开/L2=内部/L3=敏感/L4=核心敏感")
+    confidence: float = Field(description="置信度 0.0-1.0，依据不足时不超过 0.75")
+    reason: str = Field(description="简要说明判断理由")
+    need_review: bool = Field(description="依据不足或字段含义模糊时设为 true")
+
+
+class ClassificationResult(BaseModel):
+    """系统侧完整分类结果 — 在 LLM 输出之上附加检索依据和决策路径。"""
+
+    field_name: str
+    database_name: Optional[str] = None
+    table_name: Optional[str] = None
+    category: str
+    subcategory: Optional[str] = None
+    level: Literal["L1", "L2", "L3", "L4", "未知"]
+    confidence: float = 0.0
+    reason: str
+    evidence: List[Evidence] = Field(default_factory=list)
+    need_review: bool
+    decision_path: str = "rag_llm"
+    raw_response: Optional[str] = None
+
+
+# ── API 请求/响应模型 ───────────────────────────────────────────
+
+
+class ClassifyRequest(BaseModel):
+    """单字段分类 API 请求。"""
+    field_name: str
+    field_cn: Optional[str] = None
+    field_comment: Optional[str] = None
+    data_type: Optional[str] = None
+    sample_values: List[str] = Field(default_factory=list)
+    business_domain: str = "general"
+    table_name: Optional[str] = None
+    database_name: Optional[str] = None
+
+
+class BatchClassifyResponse(BaseModel):
+    """批量分类 API 响应摘要。"""
+    total_fields: int
+    completed: int
+    log: str
+    summary: str
+    report_path: Optional[str] = None
+
+
+class MySQLConnectRequest(BaseModel):
+    """MySQL 连接参数 — 使用 POST Body 避免密码出现在 URL 查询参数中。"""
+    host: str = "localhost"
+    port: int = 3306
+    user: str = "root"
+    password: str = ""
+    database: str = ""
+
+
+class ErrorLogUploadResponse(BaseModel):
+    """错题本上传 API 响应。"""
+    rules_activated: int
+    message: str

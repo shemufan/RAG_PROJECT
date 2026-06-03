@@ -1,0 +1,26 @@
+field_name,field_cn,field_comment,data_type,sample_values,business_domain,table_name,database_name
+id_card,身份证号,用户身份证号码,varchar(18),"340************1234; 110************5678",customer,user_info,user_db
+name,姓名,用户真实姓名,varchar(50),张三; 李四,customer,user_info,user_db
+phone,手机号,用户手机号码,varchar(11),138****1234; 139****5678,customer,user_info,user_db
+address,住址,用户详细居住地址,varchar(200),北京市朝阳区xx路xx号,customer,user_info,user_db
+bank_account,银行账号,用户银行卡号,varchar(19),6222********1234,finance,payment_info,finance_db
+salary,工资,员工税前月薪,decimal(12,2),15000.00; 22000.00,hr,employee_salary,hr_db
+bonus,奖金,员工年度奖金,decimal(12,2),50000.00; 80000.00,hr,employee_salary,hr_db
+ssn,社保号,员工社保编号,varchar(20),SSC-2024-00123,hr,employee_info,hr_db
+medical_record,病历,员工体检报告摘要,text,体检结果正常,hr,employee_health,hr_db
+fingerprint,指纹,员工考勤指纹数据,blob,,hr,employee_attendance,hr_db
+account_code,科目编码,企业会计科目编码,varchar(50),1001; 1002; 100201,finance,ledger,finance_db
+invoice_no,发票号,增值税发票号码,varchar(20),4401234567,finance,invoice,finance_db
+tax_rate,税率,增值税税率,decimal(5,2),13.00; 9.00,finance,invoice,finance_db
+contract_no,合同号,企业合同编号,varchar(50),HT-2024-00123,legal,contract,legal_db
+patent_id,专利号,企业专利编号,varchar(50),ZL202410012345.6,legal,patent,legal_db
+email,邮箱,用户电子邮箱,varchar(100),user@example.com,customer,user_info,user_db
+order_amount,订单金额,用户订单总金额,decimal(15,2),1999.00; 5999.00,customer,orders,order_db
+product_sku,商品SKU,商品库存单位编码,varchar(50),SKU-2024-BLK-M,product,inventory,product_db
+password_hash,密码哈希,用户登录密码哈希值,varchar(256),$2b$10$...,technical,user_auth,user_db
+token,访问令牌,用户API访问令牌,varchar(512),eyJhbGciOi...,technical,user_session,user_db
+ip_address,IP地址,用户访问IP,varchar(45),192.168.1.100,technical,access_log,log_db
+server_port,服务器端口,应用服务端口号,int,8080; 443,technical,server_config,ops_db
+dept_name,部门名称,员工所属部门,varchar(50),技术部; 财务部,hr,employee_info,hr_db
+attendance_date,考勤日期,员工出勤日期,date,2024-06-01,hr,employee_attendance,hr_db
+credit_score,信用评分,企业信用评级分数,int,750; 680,finance,enterprise_profile,finance_db
