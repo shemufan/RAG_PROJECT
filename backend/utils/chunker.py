@@ -1,4 +1,4 @@
-# knowledge/chunker.py
+# backend/utils/chunker.py
 
 import re
 import uuid
@@ -10,7 +10,7 @@ def split_by_article(
 ):
     """
     简单版结构化分块：
-    按“第X章 / 第X条”进行切分。
+    按"第X章 / 第X条"进行切分。
     Layer1 阶段先做到可用，不追求完美。
     """
     chunks = []

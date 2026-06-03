@@ -1,17 +1,21 @@
-# connectors/mysql_connector.py
+# backend/db/mysql.py
 
+from urllib.parse import quote_plus
 from sqlalchemy import create_engine, text
-from core.schemas import FieldProfile
+from backend.schemas.classify_schema import FieldProfile
 
 
 def create_mysql_engine(host, port, user, password, database):
-    url = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4"
+    url = (
+        f"mysql+pymysql://{quote_plus(user)}:{quote_plus(password)}"
+        f"@{host}:{port}/{database}?charset=utf8mb4"
+    )
     return create_engine(url)
 
 
 def scan_mysql_schema(engine, database_name: str, sample_limit: int = 5):
     sql = text("""
-        SELECT 
+        SELECT
             TABLE_SCHEMA,
             TABLE_NAME,
             COLUMN_NAME,
@@ -33,11 +37,14 @@ def scan_mysql_schema(engine, database_name: str, sample_limit: int = 5):
 
             # Layer1 可以先不取样例值；如果要取，注意脱敏
             try:
+                col = row["COLUMN_NAME"].replace("`", "``")
+                schema = row["TABLE_SCHEMA"].replace("`", "``")
+                table = row["TABLE_NAME"].replace("`", "``")
                 sample_sql = text(
-                    f"SELECT `{row['COLUMN_NAME']}` FROM `{row['TABLE_SCHEMA']}`.`{row['TABLE_NAME']}` "
-                    f"WHERE `{row['COLUMN_NAME']}` IS NOT NULL LIMIT {sample_limit}"
+                    f"SELECT `{col}` FROM `{schema}`.`{table}` "
+                    f"WHERE `{col}` IS NOT NULL LIMIT :limit"
                 )
-                sample_rows = conn.execute(sample_sql).fetchall()
+                sample_rows = conn.execute(sample_sql, {"limit": sample_limit}).fetchall()
                 sample_values = [str(r[0])[:50] for r in sample_rows]
             except Exception:
                 sample_values = []

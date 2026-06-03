@@ -2,8 +2,11 @@
 __pycache__/
 *.sqlite3
 *.json
-db/
+db/chroma.sqlite3
 *.pyc
+.claude/
+.vscode/
+.gradio/
 
 # 根目录 CSV/XLSX（生成的报告等），不影响 testdata/ 下的测试数据
 /*.csv

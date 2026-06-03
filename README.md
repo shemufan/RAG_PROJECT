@@ -8,24 +8,32 @@
 
 ## 一、整体框架设计
 
-系统采用四层架构，自上而下为：展示层 → 逻辑层 → 数据层 → 基础设施层。
+系统采用四层架构，自上而下为：前端 → API → 服务 → 数据层。
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  展示层 (ui/app.py)                                    │
+│  前端 (frontend/app.py)                                │
 │  Gradio Web → 单条语义测试 / 批量自动化评测             │
 │              / 错题本人工干预 / 知识库增量更新          │
 ├──────────────────────────────────────────────────────┤
-│  逻辑层 (core/)                                        │
-│  engine.py     → RAG 检索 + LLM 推理 + 级别解析        │
-│  evaluator.py  → 批量评测 + 指标计算 + Excel 报告导出   │
-│  schemas.py    → Pydantic 结构化数据模型               │
-│  prompt.py     → CoT 思维链 Prompt 模板                │
-│  config.py     → 全局路径 & 环境变量管理               │
+│  API 层 (backend/api/ + backend/main.py)               │
+│  FastAPI REST → /classify, /batch-classify,            │
+│                 /error-log, /knowledge-base,           │
+│                 /mysql-scan, /mysql-classify           │
+├──────────────────────────────────────────────────────┤
+│  服务层 (backend/services/)                             │
+│  rag_classifier.py    → RAG 分类主流程                 │
+│  embedding_service.py → Embedding 模型封装             │
+│  llm_service.py       → LLM 调用封装                   │
+│  batch_evaluator.py   → 批量评测逻辑                   │
+│  mysql_evaluator.py   → MySQL 评测逻辑                 │
 ├──────────────────────────────────────────────────────┤
 │  数据层                                                │
-│  Chroma 向量库 (db/)  ←  4 份法规原文 (data/)         │
-│  testdata/            ←  按业务域分类的测试集 Excel    │
+│  backend/db/chroma_store.py → Chroma 向量库           │
+│  backend/db/mysql.py        → MySQL 连接              │
+│  backend/db/result_store.py → 结果持久化               │
+│  data/knowledge_docs/       → 法规原文 (4 TXT)        │
+│  data/testdata/             → 测试数据集               │
 ├──────────────────────────────────────────────────────┤
 │  基础设施                                              │
 │  sentence-transformer (MPNet)  →  文本向量化           │
@@ -38,18 +46,21 @@
 
 | 层级 | 组件 | 职责 |
 |------|------|------|
-| 展示层 | `ui/app.py` | Gradio Blocks 构建的 Web UI，包含单条测试、批量评测、错题本上传、知识库更新四个功能模块 |
-| 逻辑层 | `core/engine.py` | 核心 RAG 引擎：向量检索 → Prompt 组装 → LLM 推理 → JSON 解析，对外暴露 `smart_predict()` 和 `classify_field()` |
-| 逻辑层 | `core/evaluator.py` | 批量评测流水线：文件加载 → 逐字段推理 → 结果回填 → 准确率/F1 计算 → 多 Sheet Excel 导出 |
-| 逻辑层 | `core/schemas.py` | 三个 Pydantic v2 模型，定义系统内部数据契约 |
-| 逻辑层 | `core/prompt.py` | CoT 思维链 Prompt 模板，引导 LLM 按 Step 1/2/3 逐步推理 |
-| 逻辑层 | `core/config.py` | 环境变量加载与全局路径常量，所有路径支持 `os.getenv` 覆盖 |
-| 数据层 | `db/` (Chroma) | 持久化向量数据库，存储法规条文的向量嵌入 |
-| 数据层 | `data/` | 4 份原始法规 TXT 文件，约 8 万中文字符 |
-| 数据层 | `testdata/` | 7 个业务域的测试 Excel，部分含标准答案列用于准确率评测 |
-| 基础设施 | `knowledge/chunker.py` | 按「第X章/第X条」结构对法律文本分块 |
-| 基础设施 | `connectors/file_loader.py` | Excel/CSV 字段画像加载器 |
-| 基础设施 | `connectors/mysql_connectors.py` | MySQL information_schema 扫描器，将数据库元数据转为 FieldProfile |
+| 前端 | `frontend/app.py` | Gradio Web UI，四个功能模块 |
+| API | `backend/main.py` | FastAPI 入口 + 服务生命周期管理 |
+| API | `backend/api/classify.py` | REST 端点：分类、批量评测、错题本、知识库 |
+| 服务 | `backend/services/rag_classifier.py` | RAG 分类管线（错题本拦截 → 检索 → LLM） |
+| 服务 | `backend/services/embedding_service.py` | HuggingFaceEmbeddings 模型封装 |
+| 服务 | `backend/services/llm_service.py` | ChatOpenAI + 结构化输出封装 |
+| 服务 | `backend/services/batch_evaluator.py` | 批量评测 + Excel 报告生成 |
+| 服务 | `backend/services/mysql_evaluator.py` | MySQL schema 扫描 + 全字段分类 |
+| 数据 | `backend/db/chroma_store.py` | Chroma 向量库操作（检索 + 入库） |
+| 数据 | `backend/db/mysql.py` | MySQL 连接 + information_schema 扫描 |
+| 数据 | `backend/db/result_store.py` | 分类结果 / 错题本规则持久化 |
+| Schema | `backend/schemas/classify_schema.py` | Pydantic 模型 + API 请求/响应契约 |
+| 工具 | `backend/utils/file_loader.py` | Excel/CSV 列名别名映射 + 字段画像加载 |
+| 工具 | `backend/utils/chunker.py` | 法规文本按「章/条」结构化分块 |
+| 配置 | `backend/core/config.py` | 全局路径 & 环境变量管理 |
 
 ---
 
@@ -415,34 +426,48 @@ Excel/CSV 文件包含以下列（标准答案为可选项）：
 
 ```
 Data_Compliance_RAG/
-├── main.py                   ← 应用入口，启动 Gradio 服务
-├── requirements.txt           ← Python 依赖
-├── api_key.env                ← API Key / 数据库配置（已 gitignore）
+├── run_gradio.py               ← Gradio 前端启动脚本
+├── requirements.txt            ← Python 依赖
+├── api_key.env                 ← API Key / 数据库配置（已 gitignore）
 │
-├── core/                      ← 核心逻辑层
-│   ├── config.py              │ 全局路径 & 环境变量
-│   ├── schemas.py             │ Pydantic 数据模型（FieldProfile / Evidence / ClassificationResult）
-│   ├── prompt.py              │ CoT 思维链 Prompt 模板
-│   ├── engine.py              │ RAG 引擎（检索 + LLM + JSON 解析 + 知识库更新）
-│   └── evaluator.py           │ 批量评测（指标计算 + Excel 报告导出）
+├── backend/                    ← 后端核心
+│   ├── main.py                 │ FastAPI 入口 + 服务生命周期
+│   ├── core/
+│   │   └── config.py           │ 全局路径 & 环境变量
+│   ├── schemas/
+│   │   └── classify_schema.py  │ Pydantic 数据模型 + API 契约
+│   ├── api/
+│   │   ├── deps.py             │ FastAPI 依赖注入
+│   │   └── classify.py         │ REST API 路由（6 个端点）
+│   ├── services/               ← RAG 团队负责
+│   │   ├── prompt.py           │ CoT 思维链 Prompt 模板
+│   │   ├── rag_classifier.py   │ RAG 分类主流程
+│   │   ├── embedding_service.py│ Embedding 模型封装
+│   │   ├── llm_service.py      │ LLM 调用封装
+│   │   ├── batch_evaluator.py  │ 批量评测逻辑
+│   │   └── mysql_evaluator.py  │ MySQL 评测逻辑
+│   ├── db/                     ← 知识库团队负责
+│   │   ├── chroma_store.py     │ Chroma 向量库操作
+│   │   ├── mysql.py            │ MySQL 连接 & schema 扫描
+│   │   └── result_store.py     │ 结果 & 错题本持久化
+│   └── utils/
+│       ├── file_loader.py      │ Excel/CSV 列名别名系统
+│       └── chunker.py          │ 法规文本结构化分块
 │
-├── knowledge/
-│   └── chunker.py             ← 法律文本按「章/条」结构化分块
+├── frontend/                   ← 前端团队负责
+│   └── app.py                  │ Gradio Web UI
 │
-├── connectors/
-│   ├── file_loader.py         ← Excel/CSV 字段画像加载器
-│   └── mysql_connectors.py    ← MySQL information_schema 扫描器
+├── data/
+│   ├── knowledge_docs/         ← 法规原文语料（4 份 TXT）
+│   └── testdata/               ← 测试数据集（Excel/CSV）
 │
-├── ui/
-│   └── app.py                 ← Gradio Web UI（单条测试 + 批量评测 + 错题本）
+├── docs/
+│   ├── api_contract.md         ← API 接口文档
+│   └── week3_progress.md       ← 进度记录
 │
-├── data/                      ← 法规原文语料（4 份 TXT，约 8 万字）
-├── testdata/                  ← 测试数据集（7 个业务域 Excel）
-├── db/                        ← Chroma 向量库持久化目录
-├── models/                    ← sentence-transformer 本地模型文件
-├── outputs/                   ← 评测报告输出目录
-│
-└── Construct.md               ← 答辩讲解提纲 / 项目设计文档
+├── db/                         ← Chroma 向量库持久化目录
+├── models/                     ← sentence-transformer 本地模型文件
+└── outputs/                    ← 评测报告输出目录
 ```
 
 ---
@@ -482,11 +507,21 @@ MYSQL_DATABASE=your_database
 
 ### 启动
 
+**方式一：Gradio 前端**（开发/演示）
+
 ```bash
-python main.py
+python run_gradio.py
 ```
 
 访问 `http://localhost:7860` 打开 Web 界面。
+
+**方式二：FastAPI 后端**（生产/API 调用）
+
+```bash
+uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+访问 `http://localhost:8000/docs` 查看 Swagger API 文档。
 
 ### 使用流程
 
@@ -494,6 +529,16 @@ python main.py
 2. **批量评测** — 上传含标准答案的 Excel 测试集，获取准确率报告和错题清单
 3. **错题本** — 上传错题 Excel 激活强制拦截规则，实现规则优先覆盖
 4. **知识库更新** — 上传新法规 TXT，增量扩充向量知识库
+5. **MySQL 数据源** — 连接 MySQL，自动扫描全部表结构并逐字段分类
+
+### 团队协作
+
+| 角色 | 负责模块 | 关键文件 |
+|------|---------|---------|
+| 后端 API 负责人 | FastAPI 入口 + REST 端点 | `backend/main.py`, `backend/api/` |
+| RAG 负责人 | 分类管线 + LLM + Embedding | `backend/services/` |
+| 知识库负责人 | Chroma + 法规管理 + 向量检索 | `backend/db/chroma_store.py`, `data/knowledge_docs/` |
+| 前端负责人 | Gradio Web UI | `frontend/app.py` |
 
 ---
 

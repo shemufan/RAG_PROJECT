@@ -1,7 +1,7 @@
-# connectors/file_loader.py
+# backend/utils/file_loader.py
 import logging
 import pandas as pd
-from core.schemas import FieldProfile
+from backend.schemas.classify_schema import FieldProfile
 
 logger = logging.getLogger(__name__)
 
