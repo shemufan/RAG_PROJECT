@@ -1,94 +1,62 @@
 # backend/schemas/classify_schema.py
+"""分类相关 Pydantic 数据模型 — Week3 接口定义。
 
-# 定义结构化输出类型
+只定义请求/响应的数据结构，不包含业务逻辑。
+"""
+
+from typing import List, Optional
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
 
 
-class FieldProfile(BaseModel):
-    database_name: Optional[str] = None
-    table_name: Optional[str] = None
-    field_name: str
-    field_comment: Optional[str] = None
-    field_cn: Optional[str] = None
-    data_type: Optional[str] = None
-    sample_values: List[str] = Field(default_factory=list)
-    business_domain: str = "general"
-    source_system: Optional[str] = None
-
-
-class Evidence(BaseModel):
-    document_name: str
-    source_type: str = "unknown"
-    domain: str = "general"
-    hierarchy_level: Optional[str] = None
-    content: str
-    score: Optional[float] = None
-    chunk_id: Optional[str] = None
-
-
-class ClassificationOutput(BaseModel):
-    """LLM 结构化输出 — 仅包含分类判定本身，不包含系统侧附加信息。"""
-
-    category: str = Field(description="数据分类，必须从以下选一: 个人信息、敏感个人信息、财务数据、员工数据、业务经营数据、技术元数据、其他")
-    subcategory: Optional[str] = Field(default=None, description="细分类，如: 个人联系方式、身份标识信息、薪酬信息")
-    level: Literal["L1", "L2", "L3", "L4"] = Field(description="敏感等级，L1=公开/L2=内部/L3=敏感/L4=核心敏感")
-    confidence: float = Field(description="置信度 0.0-1.0，依据不足时不超过 0.75")
-    reason: str = Field(description="简要说明判断理由")
-    need_review: bool = Field(description="依据不足或字段含义模糊时设为 true")
-
-
-class ClassificationResult(BaseModel):
-    """系统侧完整分类结果 — 在 LLM 输出之上附加检索依据和决策路径。"""
-
-    field_name: str
-    database_name: Optional[str] = None
-    table_name: Optional[str] = None
-    category: str
-    subcategory: Optional[str] = None
-    level: Literal["L1", "L2", "L3", "L4", "未知"]
-    confidence: float = 0.0
-    reason: str
-    evidence: List[Evidence] = Field(default_factory=list)
-    need_review: bool
-    decision_path: str = "rag_llm"
-    raw_response: Optional[str] = None
-
-
-# ── API 请求/响应模型 ───────────────────────────────────────────
-
+# ── 请求模型 ──────────────────────────────────────────────
 
 class ClassifyRequest(BaseModel):
-    """单字段分类 API 请求。"""
+    """单字段分类 API 请求体。
+
+    Attributes:
+        field_name:    字段名（必填）。
+        field_comment: 字段注释/业务说明。
+        table_name:    所属表名。
+        sample_value:  样例值，帮助 LLM 理解字段语义。
+    """
+
     field_name: str
-    field_cn: Optional[str] = None
     field_comment: Optional[str] = None
-    data_type: Optional[str] = None
-    sample_values: List[str] = Field(default_factory=list)
-    business_domain: str = "general"
     table_name: Optional[str] = None
-    database_name: Optional[str] = None
+    sample_value: Optional[str] = None
 
 
-class BatchClassifyResponse(BaseModel):
-    """批量分类 API 响应摘要。"""
-    total_fields: int
-    completed: int
-    log: str
-    summary: str
-    report_path: Optional[str] = None
+# ── 响应模型 ──────────────────────────────────────────────
+
+class ClassifyResult(BaseModel):
+    """单字段分类结果 — API 响应中 data 字段的内容。
+
+    Attributes:
+        level:              敏感等级 (L1/L2/L3/L4/未知)。
+        reason:             判定理由简述。
+        matched_rules:      命中的法规条款列表。
+        references:         引用的法规出处列表。
+        confidence:         置信度 0.0-1.0。
+        need_manual_review: 是否需要人工复核。
+    """
+
+    level: str = ""
+    reason: str = ""
+    matched_rules: List[str] = Field(default_factory=list)
+    references: List[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    need_manual_review: bool = False
 
 
-class MySQLConnectRequest(BaseModel):
-    """MySQL 连接参数 — 使用 POST Body 避免密码出现在 URL 查询参数中。"""
-    host: str = "localhost"
-    port: int = 3306
-    user: str = "root"
-    password: str = ""
-    database: str = ""
+class ClassifyResponse(BaseModel):
+    """分类 API 统一响应格式。
 
+    Attributes:
+        code:    业务状态码，200 表示成功。
+        message: 提示信息。
+        data:    分类结果。
+    """
 
-class ErrorLogUploadResponse(BaseModel):
-    """错题本上传 API 响应。"""
-    rules_activated: int
-    message: str
+    code: int = 200
+    message: str = "success"
+    data: Optional[ClassifyResult] = None
