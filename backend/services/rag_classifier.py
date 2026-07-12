@@ -17,6 +17,39 @@ class RAGClassifier:
         self.llm_service = llm_service
         self.error_cache = error_cache if error_cache is not None else {}
 
+    def build_query_text(self, field_info: dict) -> str:
+        """将字段信息字典拼接为检索查询文本。"""
+        parts = []
+        for key in ("field_name", "field_comment", "table_name"):
+            val = field_info.get(key)
+            if val:
+                parts.append(str(val))
+        return " | ".join(parts) if parts else str(field_info)
+
+    def retrieve_evidence(self, field_info: dict, k) -> list[dict]:
+        """从向量库检索相似证据，返回与下游兼容的 dict 列表。
+
+        Args:
+            field_info: 字段信息字典
+            k: 返回 top-k 相似结果
+
+        Returns:
+            list[dict]: 每条证据为一个字典，供 augment 阶段序列化使用
+        """
+        if self.chroma_store is None:
+            logger.warning("ChromaStore 未初始化，跳过向量检索")
+            return []
+
+        query_text = self.build_query_text(field_info)
+
+        try:
+            docs = self.chroma_store.similarity_search(query_text, k=k)
+            # 将 ChromaDB Document 转换为 dict，使下游 .model_dump() / json.dumps 可用
+            return [{"content": d.page_content, "metadata": d.metadata} for d in docs]
+        except Exception as e:
+            logger.error("向量检索失败: %s", str(e))
+            return []
+
     def classify_field(self, field_info: dict) -> dict:
         """对单个字段执行分类定级（Week3 mock 实现）。
 
@@ -28,43 +61,42 @@ class RAGClassifier:
             dict: 分类结果，包含 level, reason, matched_rules, references,
                   confidence, need_manual_review。
         """
-        logger.info("classify_field mock 调用: %s", field_info.get("field_name"))
+        # 步骤 1: 向量检索
+        evidence_list = self.retrieve_evidence(field_info, k=3)
 
-        field_name = field_info.get("field_name", "")
-        sample_value = field_info.get("sample_value", "")
+        # 步骤 2: 组装提示词
+        field_profile_json = json.dumps(ensure_ascii=False, indent=2)
+        evidence_json = json.dumps(
+            [e.model_dump() for e in evidence_list], ensure_ascii=False, indent=2
+        )
 
-        # 基于样例值做简单 mock 判断
-        if sample_value and any(keyword in str(sample_value) for keyword in ["@", ".com", "http"]):
-            # 样例值包含邮箱或网址特征 → 个人信息
+        user_message = CLASSIFICATION_USER.format(
+            field_profile=field_profile_json, evidence=evidence_json
+        )
+
+        # 步骤 3: LLM 推理
+        try:
+            output = self.llm_service.classify(user_message)
+
             return {
-                "level": "L2",
-                "reason": "样例值包含邮箱/网址特征，可能属于个人联系方式。",
-                "matched_rules": ["个人信息保护法 第4条"],
-                "references": ["《中华人民共和国个人信息保护法》"],
-                "confidence": 0.70,
-                "need_manual_review": False,
+                "level": output.level,
+                "reason": output.reason,
+                "matched_rules": output.matched_rules,
+                "references": output.references,
+                "confidence": output.confidence,
+                "need_manual_review": output.need_manual_review,
             }
 
-        if sample_value and any(keyword in str(sample_value) for keyword in ["138", "139", "1", "万", "元", "￥"]):
-            # 样例值包含数值特征 → 可能敏感
+        except Exception as e:
+            logger.error("LLM 调用失败: %s", str(e))
             return {
-                "level": "L3",
-                "reason": "样例值包含数值信息，可能涉及财务或交易数据。",
-                "matched_rules": ["个人信息保护法 第4条", "数据安全法 第21条"],
-                "references": ["《中华人民共和国个人信息保护法》", "《中华人民共和国数据安全法》"],
-                "confidence": 0.65,
-                "need_manual_review": False,
+                "level": '未知',
+                "reason":  f"LLM 调用失败: {str(e)}",
+                "matched_rules": [],
+                "references": [],
+                "confidence": 0.0,
+                "need_manual_review": True,
             }
-
-        # 默认 mock 结果 — 无样例值时返回 L1
-        return {
-            "level": "L1",
-            "reason": f"Mock 判定：字段 '{field_name}' 无明显敏感特征，暂定为公开。",
-            "matched_rules": ["数据安全法 第21条"],
-            "references": ["《中华人民共和国数据安全法》"],
-            "confidence": 0.60,
-            "need_manual_review": True,
-        }
 
     def set_error_log_cache(self, cache: dict):
         """更新错题本缓存。"""
