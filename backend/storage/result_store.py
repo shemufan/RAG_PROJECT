@@ -1,4 +1,4 @@
-# backend/db/result_store.py
+# backend/storage/result_store.py
 """分类结果持久化 — MySQL 写入层。
 
 所有函数内部 try-except，失败只记 log 不抛异常，

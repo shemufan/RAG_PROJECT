@@ -78,8 +78,8 @@ The system uses a **rules-first, AI-fallback** pattern:
 |--------|-----------|-----------------|
 | Backend API | `backend/main.py`, `backend/api/`, `backend/schemas/` | `backend/services/`, `frontend/` |
 | RAG/LLM | `backend/services/` (rag_classifier, embedding_service, llm_service) | `backend/api/`, `frontend/` |
-| Knowledge base | `backend/db/chroma_store.py`, `backend/db/mysql.py`, `data/` | `backend/api/`, `backend/services/rag_classifier.py` |
-| Frontend | `frontend/app.py` | `backend/services/`, `backend/db/`, `data/` |
+| Knowledge base | `backend/storage/chroma_store.py`, `backend/storage/mysql.py`, `data/` | `backend/api/`, `backend/services/rag_classifier.py` |
+| Frontend | `frontend/app.py` | `backend/services/`, `backend/storage/`, `data/` |
 
 When changing interface contracts (schemas, function signatures), update `docs/api_contract.md` and notify all members before merging.
 

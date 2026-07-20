@@ -98,7 +98,7 @@ PR 示例：
 
 修改内容：
 1. 新增 /classify 接口。
-2. 增加 ClassifyRequest 和 ClassifyResponse 数据结构。
+2. 复用 FieldProfile 请求模型并增加 ClassifyResponse 响应结构。
 3. 暂时使用 mock 数据返回分类结果。
 
 修改文件：

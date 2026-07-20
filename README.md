@@ -2,6 +2,70 @@
 
 > Layer1 基础版本 — 可行性验证阶段
 
+## Week3 Baseline：最小闭环
+
+当前演示链路为：Gradio → FastAPI → Chroma Top-3 → DeepSeek 结构化输出 →
+等级、分类、理由和检索依据展示。旧版批量评测、MySQL、错题本和在线知识库更新不属于
+Week3 启动链路。
+
+### 1. 准备环境
+
+本项目当前已在 Python 3.10 的 Conda `rag_env` 中验证：
+
+```powershell
+conda activate rag_env
+python -m pip install -r requirements.txt
+```
+
+在 `api_key.env` 中配置：
+
+```dotenv
+DEEPSEEK_API_KEY=你的密钥
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+EMBEDDING_MODEL_PATH=G:/AI_Models/sentence-transformer
+```
+
+Week3 默认使用项目下的 `db_week3/`，不会读取旧的乱码 `db/`。如需改变位置，设置
+`WEEK3_CHROMA_DB_PATH`。
+
+### 2. 重建知识库
+
+```powershell
+python -m backend.scripts.rebuild_kb
+```
+
+该命令读取 `data/rules.md` 和 `data/knowledge_docs/*.txt`，重建独立集合，并自动执行
+“身份证号”“员工工资”“商品名称”三条检索冒烟检查。
+
+### 3. 分别启动后端与前端
+
+终端一：
+
+```powershell
+uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+Swagger：`http://127.0.0.1:8000/docs`
+
+终端二：
+
+```powershell
+python run_gradio.py
+```
+
+Gradio：`http://127.0.0.1:7860`
+
+### 4. 验证与演示
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+建议依次演示：`id_card / 身份证号`、`salary / 工资`、
+`product_name / 商品名称`。真实分类会访问 DeepSeek API，产生网络请求和少量模型费用。
+
+完整请求响应定义见 `docs/api_contract.md`。
+
 利用 RAG（检索增强生成）技术，将《个人信息保护法》《数据安全法》等法规文本向量化存入本地知识库，对企业业务字段自动进行 L1~L4 敏感等级判定，提供全流程可溯源的法律依据。
 
 ---
@@ -29,9 +93,9 @@
 │  mysql_evaluator.py   → MySQL 评测逻辑                 │
 ├──────────────────────────────────────────────────────┤
 │  数据层                                                │
-│  backend/db/chroma_store.py → Chroma 向量库           │
-│  backend/db/mysql.py        → MySQL 连接              │
-│  backend/db/result_store.py → 结果持久化               │
+│  backend/storage/chroma_store.py → Chroma 向量库      │
+│  backend/storage/mysql.py        → MySQL 连接         │
+│  backend/storage/result_store.py → 结果持久化          │
 │  data/knowledge_docs/       → 法规原文 (4 TXT)        │
 │  data/testdata/             → 测试数据集               │
 ├──────────────────────────────────────────────────────┤
@@ -54,9 +118,9 @@
 | 服务 | `backend/services/llm_service.py` | ChatOpenAI + 结构化输出封装 |
 | 服务 | `backend/services/batch_evaluator.py` | 批量评测 + Excel 报告生成 |
 | 服务 | `backend/services/mysql_evaluator.py` | MySQL schema 扫描 + 全字段分类 |
-| 数据 | `backend/db/chroma_store.py` | Chroma 向量库操作（检索 + 入库） |
-| 数据 | `backend/db/mysql.py` | MySQL 连接 + information_schema 扫描 |
-| 数据 | `backend/db/result_store.py` | 分类结果 / 错题本规则持久化 |
+| 存储 | `backend/storage/chroma_store.py` | Chroma 向量库操作（检索 + 入库） |
+| 存储 | `backend/storage/mysql.py` | MySQL 连接 + information_schema 扫描 |
+| 存储 | `backend/storage/result_store.py` | 分类结果 / 错题本规则持久化 |
 | Schema | `backend/schemas/classify_schema.py` | Pydantic 模型 + API 请求/响应契约 |
 | 工具 | `backend/utils/file_loader.py` | Excel/CSV 列名别名映射 + 字段画像加载 |
 | 工具 | `backend/utils/chunker.py` | 法规文本按「章/条」结构化分块 |
@@ -438,15 +502,16 @@ Data_Compliance_RAG/
 │   │   └── classify_schema.py  │ Pydantic 数据模型 + API 契约
 │   ├── api/
 │   │   ├── deps.py             │ FastAPI 依赖注入
-│   │   └── classify.py         │ REST API 路由（6 个端点）
+│   │   └── classify.py         │ 单字段分类 REST API
 │   ├── services/               ← RAG 团队负责
 │   │   ├── prompt.py           │ CoT 思维链 Prompt 模板
 │   │   ├── rag_classifier.py   │ RAG 分类主流程
 │   │   ├── embedding_service.py│ Embedding 模型封装
 │   │   ├── llm_service.py      │ LLM 调用封装
+│   │   ├── knowledge_base_service.py │ 知识源读取与分块
 │   │   ├── batch_evaluator.py  │ 批量评测逻辑
 │   │   └── mysql_evaluator.py  │ MySQL 评测逻辑
-│   ├── db/                     ← 知识库团队负责
+│   ├── storage/                ← 存储适配层
 │   │   ├── chroma_store.py     │ Chroma 向量库操作
 │   │   ├── mysql.py            │ MySQL 连接 & schema 扫描
 │   │   └── result_store.py     │ 结果 & 错题本持久化
@@ -472,64 +537,10 @@ Data_Compliance_RAG/
 
 ---
 
-## 十一、快速开始
+## 十一、运行边界与团队协作
 
-### 环境要求
-
-- Python ≥ 3.10
-- 本地已下载 sentence-transformer 模型至 `models/sentence-transformer/`
-
-### 安装
-
-```bash
-pip install -r requirements.txt
-```
-
-### 配置
-
-编辑 `api_key.env`，填入你的配置：
-
-```env
-DEEPSEEK_API_KEY=sk-xxxxxxxx
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-EMBEDDING_MODEL_PATH=./models/sentence-transformer
-CHROMA_DB_PATH=./db
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_USER=root
-MYSQL_PASSWORD=your_password
-MYSQL_DATABASE=your_database
-```
-
-### 构建知识库
-
-将法规 TXT 文件放入 `data/` 目录，首次启动时系统会自动初始化向量库。
-
-### 启动
-
-**方式一：Gradio 前端**（开发/演示）
-
-```bash
-python run_gradio.py
-```
-
-访问 `http://localhost:7860` 打开 Web 界面。
-
-**方式二：FastAPI 后端**（生产/API 调用）
-
-```bash
-uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-访问 `http://localhost:8000/docs` 查看 Swagger API 文档。
-
-### 使用流程
-
-1. **单条测试** — 输入字段英文名、中文名、业务描述，查看大模型定级结果
-2. **批量评测** — 上传含标准答案的 Excel 测试集，获取准确率报告和错题清单
-3. **错题本** — 上传错题 Excel 激活强制拦截规则，实现规则优先覆盖
-4. **知识库更新** — 上传新法规 TXT，增量扩充向量知识库
-5. **MySQL 数据源** — 连接 MySQL，自动扫描全部表结构并逐字段分类
+Week3 的唯一运行步骤以本文开头“Week3 Baseline：最小闭环”为准。批量评测、错题本、
+在线知识库更新和 MySQL 扫描代码作为后续迭代保留，但未接入本周前端和 API 启动链路。
 
 ### 团队协作
 
@@ -537,7 +548,7 @@ uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 |------|---------|---------|
 | 后端 API 负责人 | FastAPI 入口 + REST 端点 | `backend/main.py`, `backend/api/` |
 | RAG 负责人 | 分类管线 + LLM + Embedding | `backend/services/` |
-| 知识库负责人 | Chroma + 法规管理 + 向量检索 | `backend/db/chroma_store.py`, `data/knowledge_docs/` |
+| 知识库负责人 | Chroma + 法规管理 + 向量检索 | `backend/storage/chroma_store.py`, `data/knowledge_docs/` |
 | 前端负责人 | Gradio Web UI | `frontend/app.py` |
 
 ---

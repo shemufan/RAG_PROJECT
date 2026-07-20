@@ -149,7 +149,7 @@ docs/api_contract.md
 
 ```text
 backend/services/rag_classifier.py
-backend/db/chroma_store.py
+backend/storage/chroma_store.py
 data/
 frontend/
 ```
@@ -178,8 +178,8 @@ feature/kb-data
 data/sample_fields.csv
 data/rules.md
 data/knowledge_docs/
-backend/db/chroma_store.py
-backend/db/mysql.py
+backend/storage/chroma_store.py
+backend/storage/mysql.py
 ```
 
 主要任务：

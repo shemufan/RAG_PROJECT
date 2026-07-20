@@ -3,7 +3,7 @@
 
 from fastapi import Request
 from backend.services.rag_classifier import RAGClassifier
-from backend.db.chroma_store import ChromaStore
+from backend.storage.chroma_store import ChromaStore
 
 
 def get_rag_classifier(request: Request) -> RAGClassifier:

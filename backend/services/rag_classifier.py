@@ -1,104 +1,108 @@
-# backend/services/rag_classifier.py
-"""RAG 分类器 — 核心分类管线（Week3 占位，后续实现具体逻辑）。"""
+"""Retrieval-augmented field classification for the Week3 baseline."""
 
+import json
 import logging
+
+from backend.schemas.classify_schema import (
+    ClassificationResult,
+    Evidence,
+    FieldProfile,
+)
+from backend.services.prompt import CLASSIFICATION_USER
 
 logger = logging.getLogger(__name__)
 
 
 class RAGClassifier:
-    """RAG 分类管线：错题本缓存 → 向量检索 → LLM 推理。
-
-    当前为 Week3 占位实现，后续将集成 ChromaStore 和 LLMService。
-    """
+    """Run vector retrieval followed by structured LLM classification."""
 
     def __init__(self, chroma_store=None, llm_service=None, error_cache=None):
         self.chroma_store = chroma_store
         self.llm_service = llm_service
         self.error_cache = error_cache if error_cache is not None else {}
 
-    def build_query_text(self, field_info: dict) -> str:
-        """将字段信息字典拼接为检索查询文本。"""
-        parts = []
-        for key in ("field_name", "field_comment", "table_name"):
-            val = field_info.get(key)
-            if val:
-                parts.append(str(val))
-        return " | ".join(parts) if parts else str(field_info)
+    def build_query_text(self, field: FieldProfile) -> str:
+        labels = {
+            "field_name": field.field_name,
+            "field_cn": field.field_cn,
+            "field_comment": field.field_comment,
+            "data_type": field.data_type,
+            "sample_values": "、".join(field.sample_values),
+            "business_domain": field.business_domain,
+            "table_name": field.table_name,
+            "database_name": field.database_name,
+        }
+        return "\n".join(f"{key}: {value}" for key, value in labels.items() if value)
 
-    def retrieve_evidence(self, field_info: dict, k) -> list[dict]:
-        """从向量库检索相似证据，返回与下游兼容的 dict 列表。
-
-        Args:
-            field_info: 字段信息字典
-            k: 返回 top-k 相似结果
-
-        Returns:
-            list[dict]: 每条证据为一个字典，供 augment 阶段序列化使用
-        """
+    def retrieve_evidence(self, field: FieldProfile, k: int = 3) -> list[Evidence]:
         if self.chroma_store is None:
-            logger.warning("ChromaStore 未初始化，跳过向量检索")
-            return []
+            raise RuntimeError("ChromaStore 未初始化")
 
-        query_text = self.build_query_text(field_info)
+        query = self.build_query_text(field)
+        try:
+            if hasattr(self.chroma_store, "similarity_search_with_relevance_scores"):
+                rows = self.chroma_store.similarity_search_with_relevance_scores(query, k=k)
+            else:
+                rows = [(doc, None) for doc in self.chroma_store.similarity_search(query, k=k)]
+        except Exception as exc:
+            raise RuntimeError(f"知识库检索失败: {exc}") from exc
+
+        evidence = []
+        for document, score in rows:
+            metadata = document.metadata or {}
+            evidence.append(
+                Evidence(
+                    content=document.page_content,
+                    source=metadata.get("document_name") or metadata.get("source") or "未知来源",
+                    article=metadata.get("article") or metadata.get("hierarchy_level"),
+                    score=max(0.0, min(1.0, float(score))) if score is not None else None,
+                )
+            )
+        return evidence
+
+    def classify_field(self, field: FieldProfile | dict) -> ClassificationResult:
+        if isinstance(field, dict):
+            field = FieldProfile.model_validate(field)
 
         try:
-            docs = self.chroma_store.similarity_search(query_text, k=k)
-            # 将 ChromaDB Document 转换为 dict，使下游 .model_dump() / json.dumps 可用
-            return [{"content": d.page_content, "metadata": d.metadata} for d in docs]
-        except Exception as e:
-            logger.error("向量检索失败: %s", str(e))
-            return []
+            evidence = self.retrieve_evidence(field, k=3)
+            if not evidence:
+                raise RuntimeError("知识库未检索到可用依据")
+            if self.llm_service is None:
+                raise RuntimeError("LLMService 未初始化")
 
-    def classify_field(self, field_info: dict) -> dict:
-        """对单个字段执行分类定级（Week3 mock 实现）。
-
-        Args:
-            field_info: 字段信息字典，包含 field_name, field_comment,
-                        table_name, sample_value。
-
-        Returns:
-            dict: 分类结果，包含 level, reason, matched_rules, references,
-                  confidence, need_manual_review。
-        """
-        # 步骤 1: 向量检索
-        evidence_list = self.retrieve_evidence(field_info, k=3)
-
-        # 步骤 2: 组装提示词
-        field_profile_json = json.dumps(ensure_ascii=False, indent=2)
-        evidence_json = json.dumps(
-            [e.model_dump() for e in evidence_list], ensure_ascii=False, indent=2
-        )
-
-        user_message = CLASSIFICATION_USER.format(
-            field_profile=field_profile_json, evidence=evidence_json
-        )
-
-        # 步骤 3: LLM 推理
-        try:
+            user_message = CLASSIFICATION_USER.format(
+                field_profile=json.dumps(field.model_dump(), ensure_ascii=False, indent=2),
+                evidence=json.dumps(
+                    [item.model_dump() for item in evidence], ensure_ascii=False, indent=2
+                ),
+            )
             output = self.llm_service.classify(user_message)
-
-            return {
-                "level": output.level,
-                "reason": output.reason,
-                "matched_rules": output.matched_rules,
-                "references": output.references,
-                "confidence": output.confidence,
-                "need_manual_review": output.need_manual_review,
-            }
-
-        except Exception as e:
-            logger.error("LLM 调用失败: %s", str(e))
-            return {
-                "level": '未知',
-                "reason":  f"LLM 调用失败: {str(e)}",
-                "matched_rules": [],
-                "references": [],
-                "confidence": 0.0,
-                "need_manual_review": True,
-            }
+            return ClassificationResult(
+                field_name=field.field_name,
+                category=output.category,
+                subcategory=output.subcategory,
+                level=output.level,
+                confidence=output.confidence,
+                reason=output.reason,
+                evidence=evidence,
+                need_review=output.need_review,
+                decision_path="rag_llm",
+            )
+        except Exception as exc:
+            logger.exception("字段 %s 分类失败", field.field_name)
+            return ClassificationResult(
+                field_name=field.field_name,
+                category="未知",
+                level="UNKNOWN",
+                confidence=0.0,
+                reason=f"分类失败，建议人工复核：{exc}",
+                evidence=locals().get("evidence", []),
+                need_review=True,
+                decision_path="rag_llm_error",
+            )
 
     def set_error_log_cache(self, cache: dict):
-        """更新错题本缓存。"""
+        """Retained for compatibility with the post-Week3 batch workflow."""
         self.error_cache.clear()
         self.error_cache.update(cache)
