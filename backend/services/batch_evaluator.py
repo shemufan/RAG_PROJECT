@@ -11,8 +11,8 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, classification_report
 from backend.core.config import OUTPUT_DIR, MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 from backend.utils.file_loader import load_field_profiles_from_file, resolve_column_mapping
-from backend.db.mysql import create_mysql_engine
-from backend.db.result_store import save_results, save_error_rules
+from backend.storage.mysql import create_mysql_engine
+from backend.storage.result_store import save_results, save_error_rules
 
 logger = logging.getLogger(__name__)
 

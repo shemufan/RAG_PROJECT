@@ -1,241 +1,126 @@
-# frontend/app.py
-"""Gradio Web UI — 基于重构后的 backend 服务层。
+"""Minimal Gradio client for the Week3 FastAPI baseline."""
 
-四功能模块:
-  1. 规则干预：上传错题本
-  2. 知识扩充：上传法规 TXT 入库
-  3. 单条语义测试
-  4. 批量自动化评测
-  + MySQL 数据源
-"""
+import os
 
 import gradio as gr
+import httpx
 
-from backend.services.rag_classifier import RAGClassifier
-from backend.services.batch_evaluator import BatchEvaluator
-from backend.services.mysql_evaluator import MySQLEvaluator
-from backend.core.config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
-
-# ── 服务引用（由 run_gradio.py 在启动时注入） ──
-_classifier: RAGClassifier = None
-_batch_eval: BatchEvaluator = None
-_mysql_eval: MySQLEvaluator = None
+API_URL = os.getenv("CLASSIFY_API_URL", "http://127.0.0.1:8000/api/classify")
 
 
-def init_services(classifier, chroma_store=None):
-    """初始化 Gradio 前端所需的服务引用。
-
-    Args:
-        classifier:   RAGClassifier 实例。
-        chroma_store: 保留参数，供未来扩展（当前通过 build_demo 闭包传递）。
-    """
-    global _classifier, _batch_eval, _mysql_eval
-    _classifier = classifier
-    _batch_eval = BatchEvaluator(classifier)
-    _mysql_eval = MySQLEvaluator(classifier)
+def _empty_result(level: str, message: str):
+    return level, "—", message, "0%", "暂无可展示依据", "需要人工复核"
 
 
-# ── Gradio 回调函数 ─────────────────────────────────────────
+def classify_via_api(
+    field_name: str,
+    field_cn: str,
+    field_comment: str,
+    sample_values: str,
+    *,
+    client: httpx.Client | None = None,
+):
+    """Call FastAPI and format its response for Gradio components."""
+    if not (field_name or "").strip():
+        return _empty_result("输入有误", "字段英文名不能为空。")
 
-
-def _load_error_log(file_obj):
-    """错题本上传回调 — 加载字段→级别映射并写入缓存。"""
-    if _batch_eval is None or _classifier is None:
-        return " 服务未初始化，请重启应用。"
-    if file_obj is None:
-        return " 未上传文件。"
+    payload = {
+        "field_name": field_name.strip(),
+        "field_cn": (field_cn or "").strip() or None,
+        "field_comment": (field_comment or "").strip() or None,
+        "sample_values": [
+            item.strip()
+            for item in (sample_values or "").replace("；", ";").replace("\n", ";").split(";")
+            if item.strip()
+        ],
+    }
+    owns_client = client is None
+    client = client or httpx.Client(timeout=60.0)
     try:
-        cache = _batch_eval.load_error_log(file_obj.name)
-        _classifier.set_error_log_cache(cache)
-        return f" 错题集加载成功！已激活 {len(cache)} 条强制拦截规则。"
-    except ValueError as e:
-        return f" 格式有误: {str(e)}"
-    except Exception as e:
-        return f" 格式有误: {str(e)}"
+        response = client.post(API_URL, json=payload)
+        response.raise_for_status()
+        body = response.json()
+        data = body.get("data") or {}
+        if body.get("code") != 200:
+            return _empty_result(data.get("level", "请求失败"), body.get("message", "分类失败"))
 
+        evidence_lines = []
+        for index, item in enumerate(data.get("evidence", []), start=1):
+            title = " · ".join(
+                value for value in [item.get("source"), item.get("article")] if value
+            )
+            score = item.get("score")
+            score_text = f" ｜ 相关度 {score:.0%}" if isinstance(score, (int, float)) else ""
+            evidence_lines.append(f"[{index}] {title}{score_text}\n{item.get('content', '')}")
 
-def _smart_predict(field_en, field_cn, desc):
-    """单条测试回调 — 委托给 RAGClassifier.smart_predict()。"""
-    if _classifier is None:
-        return "未知", "服务未初始化，请重启应用。", ""
-    return _classifier.smart_predict(field_en, field_cn, desc)
-
-
-def _batch_evaluate_generator(file_obj, progress=gr.Progress()):
-    """批量评测 Gradio 生成器 — 实时日志 + 进度条。"""
-    if _batch_eval is None:
-        yield "服务未初始化，请重启应用。", "未开始", None
-        return
-    if file_obj is None:
-        yield "请先上传测试集", "未开始", None
-        return
-
-    log_lines = ["开始执行批量评测任务..."]
-
-    def on_progress(index, total, field_name, level, category, confidence):
-        line = (
-            f"[{index + 1}/{total}] "
-            f"{field_name} -> {level} / {category} / confidence={confidence}"
+        category = data.get("category", "未知")
+        if data.get("subcategory"):
+            category += f" / {data['subcategory']}"
+        review = "需要人工复核" if data.get("need_review") else "无需人工复核"
+        return (
+            data.get("level", "UNKNOWN"),
+            category,
+            data.get("reason", "未返回判定理由"),
+            f"{float(data.get('confidence', 0)):.0%}",
+            "\n\n".join(evidence_lines) or "知识库未返回依据",
+            review,
         )
-        log_lines.append(line)
+    except httpx.ConnectError:
+        return _empty_result("连接失败", "无法连接后端，请先启动 FastAPI 服务。")
+    except httpx.TimeoutException:
+        return _empty_result("请求超时", "后端推理超过 60 秒，请稍后重试。")
+    except (httpx.HTTPError, ValueError) as exc:
+        return _empty_result("请求失败", f"后端响应异常：{exc}")
+    finally:
+        if owns_client:
+            client.close()
 
-    try:
-        log_lines_inner, metrics_summary, report_path, df = _batch_eval.evaluate_file(
-            file_obj.name,
-            progress_callback=on_progress,
+
+CSS = """
+:root { --ink: #17211b; --paper: #f3f0e7; --rule: #9b2c2c; --sage: #b7c4af; }
+.gradio-container { background: var(--paper) !important; color: var(--ink); max-width: 1180px !important; }
+.hero { border-top: 6px solid var(--rule); border-bottom: 1px solid #9a978e; padding: 22px 0 18px; margin-bottom: 18px; }
+.hero h1 { font-family: Georgia, 'Noto Serif SC', serif; letter-spacing: .02em; margin: 0; }
+.hero p { color: #59625c; margin: 8px 0 0; }
+.panel { border: 1px solid #bbb7ac !important; background: rgba(255,255,255,.48) !important; box-shadow: 8px 8px 0 rgba(23,33,27,.07) !important; }
+.primary { background: var(--rule) !important; border-color: var(--rule) !important; }
+.level input { font-family: Georgia, serif !important; font-size: 2rem !important; font-weight: 700 !important; color: var(--rule) !important; }
+"""
+
+
+def build_demo():
+    with gr.Blocks(title="数据合规定级 · Week3 Baseline") as demo:
+        gr.HTML(
+            "<div class='hero'><h1>数据合规定级工作台</h1>"
+            "<p>Week3 Baseline · 单字段语义检索与合规判定</p></div>"
         )
-        yield "\n".join(log_lines_inner), metrics_summary, report_path
-    except Exception as e:
-        raise gr.Error(f"系统崩溃了！原因：{str(e)}")
+        with gr.Row(equal_height=False):
+            with gr.Column(scale=5, elem_classes="panel"):
+                gr.Markdown("### 字段画像")
+                field_name = gr.Textbox(label="字段英文名 *", value="id_card")
+                field_cn = gr.Textbox(label="字段中文名", value="身份证号")
+                field_comment = gr.Textbox(
+                    label="业务描述", value="用户身份证号码", lines=3
+                )
+                sample_values = gr.Textbox(
+                    label="样例值（多值用分号或换行分隔）",
+                    value="340************1234",
+                    lines=2,
+                )
+                submit = gr.Button("执行分类定级", variant="primary", elem_classes="primary")
+            with gr.Column(scale=7, elem_classes="panel"):
+                gr.Markdown("### 判定结论")
+                with gr.Row():
+                    level = gr.Textbox(label="敏感等级", interactive=False, elem_classes="level")
+                    category = gr.Textbox(label="数据分类", interactive=False)
+                    confidence = gr.Textbox(label="置信度", interactive=False)
+                review = gr.Textbox(label="复核状态", interactive=False)
+                reason = gr.Textbox(label="判定理由", lines=7, interactive=False)
+                evidence = gr.Textbox(label="检索依据 · Top 3", lines=12, interactive=False)
 
-
-def _connect_and_scan_mysql(host, port, user, password, database):
-    """MySQL 扫描回调 — 返回扫描日志。"""
-    if _mysql_eval is None:
-        return " 服务未初始化，请重启应用。"
-    fields, log = _mysql_eval.scan(host, int(port), user, password, database)
-    return log
-
-
-def _evaluate_mysql_generator(host, port, user, password, database,
-                              progress=gr.Progress()):
-    """MySQL 批量评测 Gradio 生成器 — 实时日志 + 进度条。"""
-    if _mysql_eval is None:
-        yield "服务未初始化，请重启应用。", "未开始", None
-        return
-
-    log_lines = ["开始 MySQL 批量评测..."]
-
-    def on_progress(index, total, field_name, level, category, confidence):
-        line = (
-            f"[{index + 1}/{total}] "
-            f"{field_name} -> {level} / {category} / confidence={confidence}"
+        submit.click(
+            classify_via_api,
+            inputs=[field_name, field_cn, field_comment, sample_values],
+            outputs=[level, category, reason, confidence, evidence, review],
         )
-        log_lines.append(line)
-
-    try:
-        log_lines_inner, metrics_summary, report_path = _mysql_eval.evaluate(
-            host, int(port), user, password, database,
-            progress_callback=on_progress,
-        )
-        yield "\n".join(log_lines_inner), metrics_summary, report_path
-    except Exception as e:
-        raise gr.Error(f"系统崩溃了！原因：{str(e)}")
-
-
-# ── UI 构建 ─────────────────────────────────────────────────
-
-
-def build_demo(chroma_store=None):
-    """构建 Gradio Blocks UI。
-
-    Args:
-        chroma_store: ChromaStore 实例，用于知识库更新功能。
-    """
-    with gr.Blocks() as demo:
-        gr.Markdown("# 🛡️ 智能合规定级引擎 (含人工干预与动态学习)")
-
-        # "错题本"和"知识库更新" 并排放在网页顶部
-        with gr.Row():
-            with gr.Accordion("⚙️ 规则干预：上传错题本", open=False):
-                error_file = gr.File(label="上传错题本 (.xlsx)")
-                error_status = gr.Textbox(label="拦截器状态", value="未激活", interactive=False)
-                error_file.upload(fn=_load_error_log, inputs=error_file, outputs=error_status)
-
-            with gr.Accordion("📚 知识扩充：上传最新法规", open=False):
-                kb_files = gr.File(label="上传法规文本 (.txt)", file_count="multiple")
-                kb_btn = gr.Button("🧠 吸收知识入库")
-                kb_status = gr.Textbox(label="知识库状态", value="等待投喂...", interactive=False)
-                if chroma_store is not None:
-                    kb_btn.click(
-                        fn=chroma_store.update_knowledge_base,
-                        inputs=kb_files,
-                        outputs=kb_status,
-                    )
-                else:
-                    kb_btn.click(
-                        fn=lambda f: " 服务未初始化，无法更新知识库",
-                        inputs=kb_files,
-                        outputs=kb_status,
-                    )
-
-        # 主体功能区：三个标签页
-        with gr.Tabs():
-            with gr.TabItem("🔍 单条语义测试"):
-                gr.Markdown("输入单个业务字段，测试大模型的思维逻辑。")
-                with gr.Row():
-                    with gr.Column():
-                        input_en = gr.Textbox(label="字段英文名 (如: account_code)")
-                        input_cn = gr.Textbox(label="字段中文名")
-                        input_desc = gr.Textbox(label="业务描述", lines=3)
-                        btn_single = gr.Button("🚀 运行单条判级", variant="primary")
-                    with gr.Column():
-                        out_level = gr.Textbox(label="判定级别")
-                        out_context = gr.Textbox(label="📖 检索到的法律依据 (Top 3)", lines=8)
-                        out_reason = gr.Textbox(label="大模型推演理由", lines=5)
-                btn_single.click(
-                    fn=_smart_predict,
-                    inputs=[input_en, input_cn, input_desc],
-                    outputs=[out_level, out_reason, out_context],
-                )
-
-            with gr.TabItem("📊 批量自动化评测"):
-                gr.Markdown("上传包含 `标准答案` 的 Excel 测试集，系统将自动计算准确率并导出错题本。")
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        test_file = gr.File(label="上传测试集 (.xlsx )")
-                        btn_batch = gr.Button("🔥 启动批量评测", variant="primary")
-
-                    with gr.Column(scale=2):
-                        out_log = gr.Textbox(
-                            label=" 实时处理控制台", lines=12, max_lines=15, interactive=False
-                        )
-
-                with gr.Row():
-                    out_acc = gr.Textbox(label="系统量化指标", lines=2)
-                    out_bad_cases = gr.File(label=" 下载错题诊断表")
-
-                btn_batch.click(
-                    fn=_batch_evaluate_generator,
-                    inputs=test_file,
-                    outputs=[out_log, out_acc, out_bad_cases],
-                    show_progress="hidden",
-                )
-
-            with gr.TabItem(" MySQL 数据源"):
-                gr.Markdown("连接 MySQL 数据库，自动扫描全部表结构并逐字段分类定级。")
-                with gr.Row():
-                    mysql_host = gr.Textbox(label="主机", value=MYSQL_HOST)
-                    mysql_port = gr.Number(label="端口", value=MYSQL_PORT, precision=0)
-                    mysql_user = gr.Textbox(label="用户名", value=MYSQL_USER)
-                    mysql_password = gr.Textbox(label="密码", type="password")
-                    mysql_database = gr.Textbox(label="数据库名", placeholder=MYSQL_DATABASE or "test_db")
-
-                with gr.Row():
-                    btn_scan = gr.Button(" 连接并扫描", variant="secondary")
-                    btn_mysql_run = gr.Button(" 一键分类全部字段", variant="primary")
-
-                mysql_scan_log = gr.Textbox(label="扫描结果", lines=8, interactive=False)
-
-                with gr.Row():
-                    mysql_out_log = gr.Textbox(
-                        label="实时处理控制台", lines=10, max_lines=15, interactive=False
-                    )
-                with gr.Row():
-                    mysql_out_acc = gr.Textbox(label="量化指标", lines=2)
-                    mysql_out_report = gr.File(label="下载评测报告")
-
-                btn_scan.click(
-                    fn=lambda h, p, u, pw, db: _connect_and_scan_mysql(h, int(p), u, pw, db),
-                    inputs=[mysql_host, mysql_port, mysql_user, mysql_password, mysql_database],
-                    outputs=mysql_scan_log,
-                )
-
-                btn_mysql_run.click(
-                    fn=_evaluate_mysql_generator,
-                    inputs=[mysql_host, mysql_port, mysql_user, mysql_password, mysql_database],
-                    outputs=[mysql_out_log, mysql_out_acc, mysql_out_report],
-                    show_progress="hidden",
-                )
-
     return demo

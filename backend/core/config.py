@@ -7,7 +7,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 load_dotenv(os.path.join(BASE_DIR, "api_key.env"), override=True)
 
-DB_PATH = os.getenv("CHROMA_DB_PATH", os.path.join(BASE_DIR, "db"))
+# Week3 uses a clean store so the legacy, incorrectly encoded collection is never mixed in.
+DB_PATH = os.path.abspath(
+    os.getenv("WEEK3_CHROMA_DB_PATH", os.path.join(BASE_DIR, "db_week3"))
+)
+CHROMA_COLLECTION = os.getenv("WEEK3_CHROMA_COLLECTION", "week3_baseline")
 DATA_DIR = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", os.path.join(BASE_DIR, "outputs"))
 TESTDATA_DIR = os.getenv("TESTDATA_DIR", os.path.join(BASE_DIR, "data", "testdata"))

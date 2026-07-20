@@ -38,7 +38,7 @@ project/
 │   │   ├── rag_classifier.py
 │   │   ├── embedding_service.py
 │   │   └── llm_service.py
-│   ├── db/
+│   ├── storage/
 │   │   ├── mysql.py
 │   │   └── chroma_store.py
 │   ├── schemas/
@@ -92,7 +92,7 @@ backend/schemas/
 
 ```text
 backend/services/rag_classifier.py
-backend/db/chroma_store.py
+backend/storage/chroma_store.py
 data/
 frontend/
 ```
@@ -136,8 +136,8 @@ data/sample_fields.csv
 
 ```text
 data/
-backend/db/chroma_store.py
-backend/db/mysql.py
+backend/storage/chroma_store.py
+backend/storage/mysql.py
 ```
 
 主要职责：
@@ -179,7 +179,7 @@ frontend/
 
 ```text
 backend/services/
-backend/db/
+backend/storage/
 data/
 ```
 
