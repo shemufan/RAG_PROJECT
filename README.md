@@ -2,38 +2,79 @@
 
 ## 项目简介
 
-本项目使用法规知识检索和结构化大模型调用，对单个企业数据字段进行分类分级，并返回可追溯依据。
+本项目提供一个可查询的企业字段分类分级 Demo。系统从 A 业务数据库读取物理字段元数据和少量脱敏样例，通过 Chroma 检索法规知识、调用结构化 LLM 得出结论，再把字段资产、任务、分类结果和法规依据写入 B 合规数据库。
 
-## 当前最小功能
+三个数据存储的职责互相独立：
 
-- `GET /api/health`：服务健康检查。
-- `POST /api/classify`：接收一个 `FieldProfile` 并返回分类结果。
-- 从本地法规知识库检索相关条款。
-- 通过 DeepSeek 或兼容 OpenAI 的接口生成结构化结论。
-- 使用 Pydantic 校验输入、模型输出和 API 响应。
+- A 数据库 `enterprise_source`：保存企业业务数据，不保存分类答案。
+- Chroma：保存法规、分类规则和检索向量。
+- B 数据库 `compliance_result`：保存扫描任务、字段资产、分类结果和法规依据。
 
-## 系统流程
+原有单字段接口 `POST /api/classify` 和法规知识库重建脚本继续保留。
+
+## 完整数据流程
 
 ```text
-FastAPI → FieldProfile → 检索文本 → Chroma → 结构化 LLM → ClassificationResult
+enterprise_source
+→ SourceMySQLRepository
+→ FieldProfile
+→ FieldClassificationService
+→ Chroma + 结构化 LLM
+→ FieldClassificationRecord
+→ TargetMySQLRepository
+→ compliance_result
+→ FastAPI / SQL 查询
 ```
+
+Pipeline 是同步 Demo，不包含后台队列、定时任务或前端页面。
 
 ## 目录结构
 
 ```text
-app/                    FastAPI、Schema、服务与向量仓库
-scripts/                法规知识库重建脚本
-data/knowledge/         分类规则与法规原文
-tests/unit/             纯单元测试
-tests/integration/      API 集成测试
+app/api/                 FastAPI 路由
+app/core/                环境配置
+app/schemas/             输入、分类和 Pipeline 模型
+app/services/            单字段分类与数据库 Pipeline 编排
+app/repositories/        Chroma、A 数据库和 B 数据库适配器
+app/rag/                 Prompt 与法规分块
+data/knowledge/          分类规则和法规原文
+scripts/                 法规知识库重建脚本
+sql/                     A/B 建表、虚构数据和查询示例
+tests/unit/              不依赖外部服务的单元测试
+tests/integration/       API 测试和可选真实 MySQL 测试
 ```
 
-## 环境要求
+## FieldProfile 映射
+
+`SourceMySQLRepository` 从 `information_schema.COLUMNS` 和 `information_schema.TABLES` 获取字段信息：
+
+| MySQL 元数据 | FieldProfile |
+|---|---|
+| `TABLE_SCHEMA` | `database_name` |
+| `TABLE_NAME` | `table_name` |
+| `TABLE_COMMENT` | `table_comment` |
+| `COLUMN_NAME` | `field_name` |
+| `COLUMN_COMMENT` | `field_cn`、`field_comment` |
+| `COLUMN_TYPE` | `data_type` |
+| `IS_NULLABLE` | `is_nullable` |
+| `COLUMN_KEY` | `column_key` |
+
+`source_system` 固定为 `mysql`。业务域按表名映射为 `hr`、`customer`、`commerce` 或 `product`，未知表使用 `general`。每个字段最多读取 5 个非空样例；身份证、手机号、银行卡和邮箱在离开 A 数据库前统一脱敏，每个样例最终不超过 50 个字符。
+
+## B 数据库关系表
+
+- `classification_run`：任务状态、模型版本、开始结束时间和统计计数。
+- `data_field_asset`：使用稳定 UUID5 标识的物理字段资产。
+- `field_classification_result`：可按等级、类别、复核标记等条件查询的分类结论。
+- `classification_evidence`：按顺序保存每条分类结果引用的法规依据。
+
+`input_snapshot_json` 和 `raw_output_json` 仅用于审计快照；常用筛选字段均为普通关系字段。
+
+## 环境要求与安装
 
 - Python 3.10
+- MySQL 8.x
 - Python `venv`
-
-## 安装
 
 ```powershell
 py -3.10 -m venv .venv
@@ -43,11 +84,37 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
 
-## 配置
+已经存在的本地 Sentence Transformers 权重可以直接通过 `EMBEDDING_MODEL_PATH` 引用，不需要重新下载模型文件；Python 环境仍需安装 `sentence-transformers` 运行库。
 
-复制 `.env.example` 为 `.env`，填写 `DEEPSEEK_API_KEY` 和本地 Embedding 模型路径。`.env` 只保存在本地。如果模型文件已存在，`EMBEDDING_MODEL_PATH` 直接指向该目录，不会重新下载权重。
+## 环境配置
 
-`sample_values` 会参与检索并发送给配置的 LLM 服务，请只传入已脱敏样例。
+复制 `.env.example` 为 `.env`，填写真实配置。数据库密码只存在于服务端环境文件，不通过 API 请求传入。
+
+```dotenv
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-chat
+EMBEDDING_MODEL_PATH=G:/AI_Models/sentence-transformer
+CHROMA_DB_DIR=.runtime/chroma
+CHROMA_COLLECTION=data_classification
+KNOWLEDGE_BASE_VERSION=v1
+SOURCE_DATABASE_URL=mysql+pymysql://root:password@127.0.0.1:3306/enterprise_source
+TARGET_DATABASE_URL=mysql+pymysql://root:password@127.0.0.1:3306/compliance_result
+```
+
+只使用 `/api/classify` 时不要求 MySQL 可用；数据库连接在 Pipeline 或结果查询接口首次调用时才创建。
+
+## 初始化 A/B 数据库
+
+以下命令使用系统中的 MySQL 客户端，执行时会提示输入密码：
+
+```powershell
+cmd /c "mysql -u root -p < sql\source_schema.sql"
+cmd /c "mysql -u root -p < sql\source_seed.sql"
+cmd /c "mysql -u root -p < sql\target_schema.sql"
+```
+
+`source_seed.sql` 为四张业务表各写入 5 条完全虚构的 Demo 数据。也可以在 MySQL Workbench 中按相同顺序执行三个文件。
 
 ## 重建法规知识库
 
@@ -61,9 +128,38 @@ python -m scripts.rebuild_knowledge_base
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Swagger 地址：<http://127.0.0.1:8000/docs>
+Swagger：<http://127.0.0.1:8000/docs>
 
-## 分类请求示例
+健康检查：`GET http://127.0.0.1:8000/api/health`
+
+## 运行数据库分类 Pipeline
+
+```powershell
+$body = @{
+  sample_limit = 3
+  table_names = $null
+  continue_on_error = $true
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/api/pipeline/run `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+返回的 `PipelineSummary` 包含 `run_id`、源数据库、总字段数、成功数、复核数、失败数、状态和开始结束时间。分类服务返回 `UNKNOWN` 时，该字段计为失败并更新字段资产，但不会写入一条伪造的 L1–L4 结果。
+
+## 查询 API
+
+```text
+GET /api/runs/{run_id}
+GET /api/results?run_id=&database_name=&table_name=&column_name=&level=&category=&need_review=&limit=&offset=
+GET /api/results/{result_id}/evidence
+```
+
+`limit` 范围为 1–200。所有接口使用 Pydantic Response Model，API 层不直接编写 SQL。
+
+手工单字段分类仍可使用：
 
 ```powershell
 $body = @{
@@ -71,7 +167,7 @@ $body = @{
   field_cn = "身份证号"
   field_comment = "客户身份证件号码"
   data_type = "varchar(18)"
-  sample_values = @("340************1234")
+  sample_values = @("3401**********1234")
   business_domain = "customer"
 } | ConvertTo-Json
 
@@ -81,18 +177,30 @@ Invoke-RestMethod -Method Post `
   -Body $body
 ```
 
-成功响应的 `data` 包含 `field_name`、`category`、`subcategory`、`level`、`confidence`、`reason`、`evidence`、`need_review` 和 `decision_path`。输入校验失败返回 HTTP 422；依赖异常时为保持现有合约，HTTP 仍为 200，响应体中 `code=500`、`level=UNKNOWN` 且 `need_review=true`。
+## SQL 查询示例
 
-文本字段最长 256 字符（`field_comment` 为 1000，`field_name` 为 128）；`sample_values` 最多 5 项，每项最长 256 字符。
+[sql/query_examples.sql](sql/query_examples.sql) 提供十类关系查询，包括高敏感字段、表字段分类、等级/类别统计、人工复核、低置信度、法规依据、最近成功任务、按表统计和业务域查询。
 
 ## 测试
+
+普通测试不读取真实数据库、LLM、API Key 或本地 Embedding 模型：
 
 ```powershell
 python -m compileall app scripts
 ruff check .
-pytest -q
+pytest -q -rs
 ```
+
+真实 MySQL 集成测试只允许专用数据库名中包含 `test` 的连接：
+
+```powershell
+$env:MYSQL_TEST_SOURCE_URL = "mysql+pymysql://root:password@127.0.0.1:3306/enterprise_source_test"
+$env:MYSQL_TEST_TARGET_URL = "mysql+pymysql://root:password@127.0.0.1:3306/compliance_result_test"
+pytest -q tests/integration/test_mysql_integration.py -rs
+```
+
+未设置这两个变量时，该测试会明确显示为 skipped，不影响普通测试。
 
 ## 当前阶段边界
 
-当前只处理调用方提交的单字段画像，不扫描业务数据库、不批量评测，也不持久化分类结果。后续数据接入应复用 `FieldProfile`、`FieldClassificationService.classify_field()` 和 `ClassificationResult`。
+当前实现面向同步 Demo：一次请求扫描一组字段并逐字段分类写入。生产化阶段仍需根据数据规模补充任务调度、限流、凭据管理、运行恢复和知识库版本切换，但这些能力不属于当前阶段。
