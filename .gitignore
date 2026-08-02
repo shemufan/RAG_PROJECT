@@ -19,6 +19,7 @@ venv/
 .gradio/
 
 .runtime/
+.worktrees/
 outputs/
 logs/
 
