@@ -27,7 +27,26 @@ def test_field_profile_rejects_oversized_input():
     with pytest.raises(ValidationError):
         FieldProfile(field_name="name", sample_values=["1", "2", "3", "4", "5", "6"])
     with pytest.raises(ValidationError):
-        FieldProfile(field_name="name", sample_values=["x" * 257])
+        FieldProfile(field_name="name", sample_values=["x" * 51])
+
+
+def test_field_profile_has_pipeline_metadata_and_manual_defaults():
+    profile = FieldProfile(field_name="employee_id")
+
+    assert profile.schema_version == "1.0"
+    assert profile.source_system == "manual"
+    assert profile.database_name == "manual"
+    assert profile.table_name == "manual"
+    assert profile.data_type == "unknown"
+    assert profile.is_nullable is True
+
+
+@pytest.mark.parametrize("field", ["field_name", "database_name", "table_name"])
+def test_field_profile_rejects_empty_physical_identity(field):
+    payload = {"field_name": "name", field: ""}
+
+    with pytest.raises(ValidationError):
+        FieldProfile(**payload)
 
 
 def test_classification_output_rejects_invalid_level_and_confidence():

@@ -8,3 +8,5 @@ langchain-huggingface
 langchain-chroma
 chromadb
 sentence-transformers
+sqlalchemy>=2.0,<3.0
+pymysql>=1.1,<2.0

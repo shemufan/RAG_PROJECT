@@ -28,6 +28,8 @@ class Settings:
     chroma_collection: str
     knowledge_base_version: str
     knowledge_dir: Path
+    source_database_url: str | None
+    target_database_url: str | None
 
 
 def load_settings(project_root: str | Path = PROJECT_ROOT) -> Settings:
@@ -58,6 +60,8 @@ def load_settings(project_root: str | Path = PROJECT_ROOT) -> Settings:
         ),
         knowledge_base_version=os.getenv("KNOWLEDGE_BASE_VERSION", "v1"),
         knowledge_dir=root / "data" / "knowledge",
+        source_database_url=os.getenv("SOURCE_DATABASE_URL") or None,
+        target_database_url=os.getenv("TARGET_DATABASE_URL") or None,
     )
 
 

@@ -12,6 +12,8 @@ def test_config_loads_project_root_env_and_resolves_relative_paths(tmp_path, mon
         "CHROMA_DB_DIR",
         "CHROMA_COLLECTION",
         "KNOWLEDGE_BASE_VERSION",
+        "SOURCE_DATABASE_URL",
+        "TARGET_DATABASE_URL",
     ):
         monkeypatch.delenv(name, raising=False)
     (tmp_path / ".env").write_text(
@@ -23,7 +25,9 @@ def test_config_loads_project_root_env_and_resolves_relative_paths(tmp_path, mon
         "EMBEDDING_MODEL_PATH=models/embedding\n"
         "CHROMA_DB_DIR=.runtime/chroma\n"
         "CHROMA_COLLECTION=test_collection\n"
-        "KNOWLEDGE_BASE_VERSION=v-test\n",
+        "KNOWLEDGE_BASE_VERSION=v-test\n"
+        "SOURCE_DATABASE_URL=mysql+pymysql://source/enterprise_source\n"
+        "TARGET_DATABASE_URL=mysql+pymysql://target/compliance_result\n",
         encoding="utf-8",
     )
 
@@ -35,3 +39,5 @@ def test_config_loads_project_root_env_and_resolves_relative_paths(tmp_path, mon
     assert settings.embedding_model_path == tmp_path / "models" / "embedding"
     assert settings.chroma_db_dir == tmp_path / ".runtime" / "chroma"
     assert settings.knowledge_dir == tmp_path / "data" / "knowledge"
+    assert settings.source_database_url.endswith("/enterprise_source")
+    assert settings.target_database_url.endswith("/compliance_result")
