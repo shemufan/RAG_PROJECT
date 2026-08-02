@@ -1,24 +1,10 @@
-# ============================================================
-# 智能合规定级引擎 — 直接依赖（精简版）
-# 安装: pip install -r requirements.txt
-# ============================================================
-gradio>=6.0
-langchain>=1.2
-langchain-core>=1.2
-langchain-openai>=1.1
-langchain-text-splitters>=1.1
-langchain-huggingface>=0.1
-langchain-chroma>=0.2
-chromadb>=1.5
-sentence-transformers>=5.4
-pandas>=2.3
-openpyxl>=3.1
-scikit-learn>=1.7
-python-dotenv>=1.2
-pymysql
-sqlalchemy>=2.0
-fastapi>=0.115
-uvicorn>=0.34
-python-multipart>=0.0.20
-httpx>=0.28
-pytest>=8.0
+fastapi
+uvicorn
+pydantic
+python-dotenv
+langchain-core
+langchain-openai
+langchain-huggingface
+langchain-chroma
+chromadb
+sentence-transformers
