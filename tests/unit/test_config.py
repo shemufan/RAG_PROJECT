@@ -14,6 +14,12 @@ def test_config_loads_project_root_env_and_resolves_relative_paths(tmp_path, mon
         "KNOWLEDGE_BASE_VERSION",
         "SOURCE_DATABASE_URL",
         "TARGET_DATABASE_URL",
+        "QWEN_OCR_API_KEY",
+        "QWEN_OCR_BASE_URL",
+        "QWEN_OCR_MODEL",
+        "QWEN_OCR_CACHE_DIR",
+        "QWEN_OCR_TIMEOUT_SECONDS",
+        "QWEN_OCR_MAX_RETRIES",
     ):
         monkeypatch.delenv(name, raising=False)
     (tmp_path / ".env").write_text(
@@ -27,7 +33,13 @@ def test_config_loads_project_root_env_and_resolves_relative_paths(tmp_path, mon
         "CHROMA_COLLECTION=test_collection\n"
         "KNOWLEDGE_BASE_VERSION=v-test\n"
         "SOURCE_DATABASE_URL=mysql+pymysql://source/enterprise_source\n"
-        "TARGET_DATABASE_URL=mysql+pymysql://target/compliance_result\n",
+        "TARGET_DATABASE_URL=mysql+pymysql://target/compliance_result\n"
+        "QWEN_OCR_API_KEY=ocr-test-key\n"
+        "QWEN_OCR_BASE_URL=https://workspace.example.test/compatible-mode/v1\n"
+        "QWEN_OCR_MODEL=qwen3.5-ocr\n"
+        "QWEN_OCR_CACHE_DIR=.runtime/ocr_cache\n"
+        "QWEN_OCR_TIMEOUT_SECONDS=90\n"
+        "QWEN_OCR_MAX_RETRIES=3\n",
         encoding="utf-8",
     )
 
@@ -41,3 +53,9 @@ def test_config_loads_project_root_env_and_resolves_relative_paths(tmp_path, mon
     assert settings.knowledge_dir == tmp_path / "data" / "knowledge"
     assert settings.source_database_url.endswith("/enterprise_source")
     assert settings.target_database_url.endswith("/compliance_result")
+    assert settings.qwen_ocr_api_key == "ocr-test-key"
+    assert settings.qwen_ocr_base_url == "https://workspace.example.test/compatible-mode/v1"
+    assert settings.qwen_ocr_model == "qwen3.5-ocr"
+    assert settings.qwen_ocr_cache_dir == tmp_path / ".runtime" / "ocr_cache"
+    assert settings.qwen_ocr_timeout_seconds == 90
+    assert settings.qwen_ocr_max_retries == 3

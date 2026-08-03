@@ -30,6 +30,12 @@ class Settings:
     knowledge_dir: Path
     source_database_url: str | None
     target_database_url: str | None
+    qwen_ocr_api_key: str
+    qwen_ocr_base_url: str
+    qwen_ocr_model: str
+    qwen_ocr_cache_dir: Path
+    qwen_ocr_timeout_seconds: float
+    qwen_ocr_max_retries: int
 
 
 def load_settings(project_root: str | Path = PROJECT_ROOT) -> Settings:
@@ -62,6 +68,17 @@ def load_settings(project_root: str | Path = PROJECT_ROOT) -> Settings:
         knowledge_dir=root / "data" / "knowledge",
         source_database_url=os.getenv("SOURCE_DATABASE_URL") or None,
         target_database_url=os.getenv("TARGET_DATABASE_URL") or None,
+        qwen_ocr_api_key=os.getenv("QWEN_OCR_API_KEY", ""),
+        qwen_ocr_base_url=os.getenv("QWEN_OCR_BASE_URL", ""),
+        qwen_ocr_model=os.getenv("QWEN_OCR_MODEL", "qwen3.5-ocr"),
+        qwen_ocr_cache_dir=_resolve_path(
+            root,
+            os.getenv("QWEN_OCR_CACHE_DIR", ".runtime/ocr_cache"),
+        ),
+        qwen_ocr_timeout_seconds=float(
+            os.getenv("QWEN_OCR_TIMEOUT_SECONDS", "180")
+        ),
+        qwen_ocr_max_retries=int(os.getenv("QWEN_OCR_MAX_RETRIES", "2")),
     )
 
 
