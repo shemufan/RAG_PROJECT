@@ -117,10 +117,10 @@ class QwenOCRService:
             policy_response.raise_for_status()
             policy = policy_response.json()["data"]
             key = f"{policy['upload_dir']}/{path.name}"
-        except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+        except (requests.RequestException, KeyError, TypeError, ValueError):
             raise OCRExtractionError(
                 f"{path.name}: failed to obtain Qwen upload policy"
-            ) from exc
+            ) from None
 
         try:
             with path.open("rb") as pdf_stream:
@@ -143,8 +143,10 @@ class QwenOCRService:
                     timeout=self.timeout_seconds,
                 )
                 upload_response.raise_for_status()
-        except (requests.RequestException, KeyError, OSError, TypeError) as exc:
-            raise OCRExtractionError(f"{path.name}: failed to upload PDF for OCR") from exc
+        except (requests.RequestException, KeyError, OSError, TypeError):
+            raise OCRExtractionError(
+                f"{path.name}: failed to upload PDF for OCR"
+            ) from None
         return f"oss://{key}"
 
     def _call_qwen(self, document_name: str, file_url: str) -> str:
@@ -159,10 +161,10 @@ class QwenOCRService:
                     timeout=self.timeout_seconds,
                     max_retries=self.max_retries,
                 ).responses
-            except Exception as exc:
+            except Exception:
                 raise OCRExtractionError(
                     f"{document_name}: failed to initialize Qwen OCR client"
-                ) from exc
+                ) from None
         try:
             response = responses.create(
                 model=self.model,
@@ -177,6 +179,8 @@ class QwenOCRService:
                 ],
                 extra_body={"ocr_options": {"task": "document_parsing"}},
             )
-        except Exception as exc:
-            raise OCRExtractionError(f"{document_name}: Qwen OCR request failed") from exc
+        except Exception:
+            raise OCRExtractionError(
+                f"{document_name}: Qwen OCR request failed"
+            ) from None
         return str(getattr(response, "output_text", "")).strip()

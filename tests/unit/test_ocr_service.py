@@ -1,3 +1,4 @@
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -283,6 +284,12 @@ def test_upload_error_does_not_leak_credentials_or_signed_values(tmp_path):
     assert "test-api-key" not in message
     assert "signed-secret" not in message
     assert "oss://" not in message
+    rendered_traceback = "".join(
+        traceback.format_exception(captured.type, captured.value, captured.tb)
+    )
+    assert "test-api-key" not in rendered_traceback
+    assert "signed-secret" not in rendered_traceback
+    assert "oss://" not in rendered_traceback
 
 
 def test_qwen_error_does_not_leak_credentials_or_file_url(tmp_path):
@@ -301,3 +308,8 @@ def test_qwen_error_does_not_leak_credentials_or_file_url(tmp_path):
     assert "law.pdf" in message
     assert "test-api-key" not in message
     assert "oss://" not in message
+    rendered_traceback = "".join(
+        traceback.format_exception(captured.type, captured.value, captured.tb)
+    )
+    assert "test-api-key" not in rendered_traceback
+    assert "oss://" not in rendered_traceback
