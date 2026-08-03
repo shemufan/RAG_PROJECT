@@ -267,6 +267,18 @@ def test_empty_qwen_output_is_rejected_and_not_cached(tmp_path):
     assert not list((tmp_path / "cache").glob("*.txt"))
 
 
+def test_none_qwen_output_is_rejected_and_not_cached(tmp_path):
+    path = tmp_path / "law.pdf"
+    write_pdf(path)
+    session = FakeHTTPSession(FakeHTTPResponse(upload_policy()))
+    service = make_transport_service(tmp_path, session, FakeResponsesClient(None))
+
+    with pytest.raises(OCRExtractionError, match="law.pdf.*empty"):
+        service.extract_pdf(path)
+
+    assert not list((tmp_path / "cache").glob("*.txt"))
+
+
 def test_upload_error_does_not_leak_credentials_or_signed_values(tmp_path):
     path = tmp_path / "law.pdf"
     write_pdf(path)

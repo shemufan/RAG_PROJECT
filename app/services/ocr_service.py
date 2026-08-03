@@ -183,4 +183,5 @@ class QwenOCRService:
             raise OCRExtractionError(
                 f"{document_name}: Qwen OCR request failed"
             ) from None
-        return str(getattr(response, "output_text", "")).strip()
+        output_text = getattr(response, "output_text", None)
+        return output_text.strip() if isinstance(output_text, str) else ""
