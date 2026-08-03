@@ -100,9 +100,18 @@ CHROMA_COLLECTION=data_classification
 KNOWLEDGE_BASE_VERSION=v1
 SOURCE_DATABASE_URL=mysql+pymysql://root:password@127.0.0.1:3306/enterprise_source
 TARGET_DATABASE_URL=mysql+pymysql://root:password@127.0.0.1:3306/compliance_result
+QWEN_OCR_API_KEY=
+QWEN_OCR_BASE_URL=https://你的WorkspaceId.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+QWEN_OCR_MODEL=qwen3.5-ocr
+QWEN_OCR_CACHE_DIR=.runtime/ocr_cache
+QWEN_OCR_TIMEOUT_SECONDS=180
+QWEN_OCR_MAX_RETRIES=2
 ```
 
 只使用 `/api/classify` 时不要求 MySQL 可用；数据库连接在 Pipeline 或结果查询接口首次调用时才创建。
+
+只有 `data/knowledge/laws/` 中存在 PDF 时才要求配置 `QWEN_OCR_API_KEY` 和
+`QWEN_OCR_BASE_URL`。TXT-only 知识库不会创建千问客户端。
 
 ## 初始化 A/B 数据库
 
@@ -118,9 +127,36 @@ cmd /c "mysql -u root -p < sql\target_schema.sql"
 
 ## 重建法规知识库
 
+法规目录原生支持：
+
+```text
+data/knowledge/classification_rules.md
+data/knowledge/laws/*.txt
+data/knowledge/laws/*.pdf
+```
+
+PDF 会先上传至阿里云百炼临时存储，由 `qwen3.5-ocr` 完成文档解析，再进入与 TXT
+相同的法规分块、Embedding 和 Chroma 流程。单个 PDF 必须未加密、包含 1–50 页且不超过
+100 MB。上传 PDF 前必须确认该文档允许离开本机并由阿里云百炼处理。
+
+OCR 结果按 PDF 内容、模型名称和 Prompt 版本缓存在 `.runtime/ocr_cache/`。文件未变化时
+重建不会重复调用付费 OCR；PDF、模型或 Prompt 变化会自动生成新缓存。
+
+更新法规的推荐顺序：
+
+1. 停止 FastAPI。
+2. 将允许上传的 TXT/PDF 放入 `data/knowledge/laws/`。
+3. 移出已经废止的旧法规，避免新旧标准同时参与检索。
+4. 在 `.env` 中增加 `KNOWLEDGE_BASE_VERSION`。
+5. 执行重建命令。
+6. 重启 FastAPI，并通过结果 Evidence 确认 `document_name` 是新 PDF。
+
 ```powershell
 python -m scripts.rebuild_knowledge_base
 ```
+
+所有文档必须先成功读取/OCR，程序才会清空并替换 Chroma collection。任意 PDF 损坏、
+超限、配置缺失或 OCR 失败都会终止重建并保留旧知识库，不会静默跳过文件。
 
 ## 启动 FastAPI
 
@@ -200,6 +236,20 @@ pytest -q tests/integration/test_mysql_integration.py -rs
 ```
 
 未设置这两个变量时，该测试会明确显示为 skipped，不影响普通测试。
+
+真实千问 OCR 测试是付费且显式启用的，只能使用不含敏感信息、且不超过 5 MB 的测试 PDF：
+
+```powershell
+$env:RUN_QWEN_OCR_INTEGRATION = "1"
+$env:QWEN_OCR_TEST_PDF = "G:\path\to\non-sensitive-test.pdf"
+$env:QWEN_OCR_API_KEY = "你的测试Key"
+$env:QWEN_OCR_BASE_URL = "https://你的WorkspaceId.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+$env:QWEN_OCR_MODEL = "qwen3.5-ocr"
+pytest -q tests/integration/test_qwen_ocr_integration.py -rs
+```
+
+未显式设置 `RUN_QWEN_OCR_INTEGRATION=1` 时不会发起千问请求。当前临时上传方案适合受控、
+低频的同步知识库重建；生产高并发摄取应改用正式 OSS、访问控制和保留策略。
 
 ## 当前阶段边界
 
