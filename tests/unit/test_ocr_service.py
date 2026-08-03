@@ -1,6 +1,8 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import requests
 from pypdf import PdfWriter
 
 import app.services.ocr_service as ocr_module
@@ -134,3 +136,168 @@ def test_empty_extraction_is_rejected_and_not_cached(tmp_path):
         service.extract_pdf(path)
 
     assert not list((tmp_path / "cache").glob("*.txt"))
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload=None, *, error: Exception | None = None):
+        self.payload = payload or {}
+        self.error = error
+
+    def raise_for_status(self):
+        if self.error:
+            raise self.error
+
+    def json(self):
+        return self.payload
+
+
+class FakeHTTPSession:
+    def __init__(self, policy_response, upload_response=None):
+        self.policy_response = policy_response
+        self.upload_response = upload_response or FakeHTTPResponse()
+        self.get_calls = []
+        self.post_calls = []
+
+    def get(self, url, **kwargs):
+        self.get_calls.append((url, kwargs))
+        return self.policy_response
+
+    def post(self, url, **kwargs):
+        files = kwargs["files"]
+        self.post_calls.append(
+            {
+                "url": url,
+                "field_names": set(files),
+                "file_name": files["file"][0],
+                "timeout": kwargs["timeout"],
+            }
+        )
+        return self.upload_response
+
+
+class FakeResponsesClient:
+    def __init__(self, output_text="第一章 总则\n第一条 测试法规", error=None):
+        self.output_text = output_text
+        self.error = error
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return SimpleNamespace(output_text=self.output_text)
+
+
+def upload_policy():
+    return {
+        "data": {
+            "upload_dir": "tmp/upload-secret",
+            "upload_host": "https://upload.example.test",
+            "oss_access_key_id": "temporary-access-id",
+            "signature": "signed-secret",
+            "policy": "policy-secret",
+            "x_oss_object_acl": "private",
+            "x_oss_forbid_overwrite": "true",
+        }
+    }
+
+
+def make_transport_service(tmp_path, session, responses):
+    return QwenOCRService(
+        api_key="test-api-key",
+        base_url="https://workspace.example.test/compatible-mode/v1",
+        model="qwen3.5-ocr",
+        cache_dir=tmp_path / "cache",
+        http_session=session,
+        responses_client=responses,
+    )
+
+
+def test_cache_miss_uploads_pdf_and_returns_qwen_output(tmp_path):
+    path = tmp_path / "新标准.pdf"
+    write_pdf(path)
+    session = FakeHTTPSession(FakeHTTPResponse(upload_policy()))
+    responses = FakeResponsesClient()
+    service = make_transport_service(tmp_path, session, responses)
+
+    text = service.extract_pdf(path)
+
+    assert text == "第一章 总则\n第一条 测试法规"
+    assert session.get_calls[0][0] == "https://dashscope.aliyuncs.com/api/v1/uploads"
+    assert session.get_calls[0][1]["params"] == {
+        "action": "getPolicy",
+        "model": "qwen3.5-ocr",
+    }
+    assert session.post_calls[0]["url"] == "https://upload.example.test"
+    assert session.post_calls[0]["file_name"] == "新标准.pdf"
+
+
+def test_qwen_request_uses_document_parsing_and_legal_prompt(tmp_path):
+    path = tmp_path / "law.pdf"
+    write_pdf(path)
+    session = FakeHTTPSession(FakeHTTPResponse(upload_policy()))
+    responses = FakeResponsesClient()
+    service = make_transport_service(tmp_path, session, responses)
+
+    service.extract_pdf(path)
+
+    request = responses.calls[0]
+    assert request["model"] == "qwen3.5-ocr"
+    assert request["extra_body"] == {"ocr_options": {"task": "document_parsing"}}
+    content = request["input"][0]["content"]
+    assert content[0] == {
+        "type": "input_file",
+        "file_url": "oss://tmp/upload-secret/law.pdf",
+    }
+    assert content[1]["type"] == "input_text"
+    assert "不要总结" in content[1]["text"]
+    assert "章节" in content[1]["text"]
+
+
+def test_empty_qwen_output_is_rejected_and_not_cached(tmp_path):
+    path = tmp_path / "law.pdf"
+    write_pdf(path)
+    session = FakeHTTPSession(FakeHTTPResponse(upload_policy()))
+    service = make_transport_service(tmp_path, session, FakeResponsesClient("   "))
+
+    with pytest.raises(OCRExtractionError, match="law.pdf.*empty"):
+        service.extract_pdf(path)
+
+    assert not list((tmp_path / "cache").glob("*.txt"))
+
+
+def test_upload_error_does_not_leak_credentials_or_signed_values(tmp_path):
+    path = tmp_path / "law.pdf"
+    write_pdf(path)
+    unsafe = requests.HTTPError(
+        "Bearer test-api-key signed-secret oss://tmp/upload-secret/law.pdf"
+    )
+    session = FakeHTTPSession(FakeHTTPResponse(error=unsafe))
+    service = make_transport_service(tmp_path, session, FakeResponsesClient())
+
+    with pytest.raises(OCRExtractionError) as captured:
+        service.extract_pdf(path)
+
+    message = str(captured.value)
+    assert "law.pdf" in message
+    assert "test-api-key" not in message
+    assert "signed-secret" not in message
+    assert "oss://" not in message
+
+
+def test_qwen_error_does_not_leak_credentials_or_file_url(tmp_path):
+    path = tmp_path / "law.pdf"
+    write_pdf(path)
+    session = FakeHTTPSession(FakeHTTPResponse(upload_policy()))
+    responses = FakeResponsesClient(
+        error=RuntimeError("test-api-key oss://tmp/upload-secret/law.pdf")
+    )
+    service = make_transport_service(tmp_path, session, responses)
+
+    with pytest.raises(OCRExtractionError) as captured:
+        service.extract_pdf(path)
+
+    message = str(captured.value)
+    assert "law.pdf" in message
+    assert "test-api-key" not in message
+    assert "oss://" not in message

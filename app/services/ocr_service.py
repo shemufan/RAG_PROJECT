@@ -4,12 +4,18 @@ import hashlib
 from pathlib import Path
 from uuid import uuid4
 
+import requests
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 MAX_PDF_BYTES = 100 * 1024 * 1024
 MAX_PDF_PAGES = 50
 OCR_PROMPT_VERSION = "legal-document-v1"
+UPLOAD_POLICY_URL = "https://dashscope.aliyuncs.com/api/v1/uploads"
+LEGAL_OCR_PROMPT = (
+    "完整提取该法规文档中的所有文字，严格保持原始阅读顺序，并保留标题、章节、"
+    "条款编号和自然段。不要总结、解释、改写或补充内容；无法辨认的字符使用 ? 表示。"
+)
 
 
 class OCRExtractionError(RuntimeError):
@@ -95,4 +101,82 @@ class QwenOCRService:
             temporary.unlink(missing_ok=True)
 
     def _extract_with_qwen(self, path: Path) -> str:
-        raise OCRExtractionError(f"{path.name}: Qwen OCR transport is not configured")
+        file_url = self._upload_pdf(path)
+        return self._call_qwen(path.name, file_url)
+
+    def _upload_pdf(self, path: Path) -> str:
+        session = self._http_session or requests.Session()
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        try:
+            policy_response = session.get(
+                UPLOAD_POLICY_URL,
+                headers=headers,
+                params={"action": "getPolicy", "model": self.model},
+                timeout=self.timeout_seconds,
+            )
+            policy_response.raise_for_status()
+            policy = policy_response.json()["data"]
+            key = f"{policy['upload_dir']}/{path.name}"
+        except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+            raise OCRExtractionError(
+                f"{path.name}: failed to obtain Qwen upload policy"
+            ) from exc
+
+        try:
+            with path.open("rb") as pdf_stream:
+                files = {
+                    "OSSAccessKeyId": (None, policy["oss_access_key_id"]),
+                    "Signature": (None, policy["signature"]),
+                    "policy": (None, policy["policy"]),
+                    "x-oss-object-acl": (None, policy["x_oss_object_acl"]),
+                    "x-oss-forbid-overwrite": (
+                        None,
+                        policy["x_oss_forbid_overwrite"],
+                    ),
+                    "key": (None, key),
+                    "success_action_status": (None, "200"),
+                    "file": (path.name, pdf_stream, "application/pdf"),
+                }
+                upload_response = session.post(
+                    policy["upload_host"],
+                    files=files,
+                    timeout=self.timeout_seconds,
+                )
+                upload_response.raise_for_status()
+        except (requests.RequestException, KeyError, OSError, TypeError) as exc:
+            raise OCRExtractionError(f"{path.name}: failed to upload PDF for OCR") from exc
+        return f"oss://{key}"
+
+    def _call_qwen(self, document_name: str, file_url: str) -> str:
+        responses = self._responses_client
+        if responses is None:
+            try:
+                from openai import OpenAI
+
+                responses = OpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    timeout=self.timeout_seconds,
+                    max_retries=self.max_retries,
+                ).responses
+            except Exception as exc:
+                raise OCRExtractionError(
+                    f"{document_name}: failed to initialize Qwen OCR client"
+                ) from exc
+        try:
+            response = responses.create(
+                model=self.model,
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_file", "file_url": file_url},
+                            {"type": "input_text", "text": LEGAL_OCR_PROMPT},
+                        ],
+                    }
+                ],
+                extra_body={"ocr_options": {"task": "document_parsing"}},
+            )
+        except Exception as exc:
+            raise OCRExtractionError(f"{document_name}: Qwen OCR request failed") from exc
+        return str(getattr(response, "output_text", "")).strip()
