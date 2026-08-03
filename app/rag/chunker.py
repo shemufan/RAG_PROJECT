@@ -16,6 +16,7 @@ def split_knowledge_text(
     *,
     source_type: str,
     version: str,
+    source_format: str = "txt",
 ) -> list[Document]:
     """Split a source at legal article or Markdown rule boundaries."""
     chunks: list[Document] = []
@@ -34,6 +35,7 @@ def split_knowledge_text(
             "chapter": chapter,
             "article": article,
             "version": version,
+            "source_format": source_format,
         }
         for level in ("L4", "L3", "L2", "L1"):
             if level in content:
