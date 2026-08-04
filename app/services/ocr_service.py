@@ -1,20 +1,31 @@
 """PDF validation and cached Qwen OCR text extraction."""
 
+import base64
 import hashlib
 from pathlib import Path
 from uuid import uuid4
 
-import requests
+from PIL import Image
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+from app.services.pdf_image_service import PdfImageRenderError, PdfImageService
+
 MAX_PDF_BYTES = 100 * 1024 * 1024
 MAX_PDF_PAGES = 50
-OCR_PROMPT_VERSION = "legal-document-v1"
-UPLOAD_POLICY_URL = "https://dashscope.aliyuncs.com/api/v1/uploads"
+MAX_BASE64_IMAGE_BYTES = 10 * 1024 * 1024
+MIN_NATIVE_TEXT_CHARACTERS = 5
+MIN_IMAGE_INK_RATIO = 0.0005
+OCR_PROMPT_VERSION = "legal-hybrid-page-v3"
 LEGAL_OCR_PROMPT = (
-    "完整提取该法规文档中的所有文字，严格保持原始阅读顺序，并保留标题、章节、"
+    "完整提取该法规页面中的所有文字，严格保持原始阅读顺序，并保留标题、章节、"
     "条款编号和自然段。不要总结、解释、改写或补充内容；无法辨认的字符使用 ? 表示。"
+)
+INVALID_OUTPUT_MARKERS = (
+    "没有可供提取",
+    "未提供法规文档",
+    "未提供文档",
+    "无法提取",
 )
 
 
@@ -23,7 +34,7 @@ class OCRExtractionError(RuntimeError):
 
 
 class QwenOCRService:
-    """Validate PDFs and cache text produced by an injected or Qwen extractor."""
+    """Validate PDFs, OCR locally rendered pages, and cache merged text."""
 
     def __init__(
         self,
@@ -35,8 +46,8 @@ class QwenOCRService:
         timeout_seconds: float = 180,
         max_retries: int = 2,
         extractor=None,
-        http_session=None,
-        responses_client=None,
+        image_service=None,
+        chat_client=None,
     ):
         self.api_key = api_key
         self.base_url = base_url
@@ -45,8 +56,8 @@ class QwenOCRService:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self._extractor = extractor
-        self._http_session = http_session
-        self._responses_client = responses_client
+        self._image_service = image_service or PdfImageService()
+        self._chat_client = chat_client
 
     def extract_pdf(self, path: str | Path) -> str:
         """Return cached or newly extracted text for one validated PDF."""
@@ -85,11 +96,22 @@ class QwenOCRService:
             )
 
     def _cache_path(self, path: Path) -> Path:
+        return self.cache_dir / f"{self._cache_digest(path)}.txt"
+
+    def _cache_digest(self, path: Path) -> str:
         digest = hashlib.sha256()
         digest.update(path.read_bytes())
         digest.update(self.model.encode("utf-8"))
         digest.update(OCR_PROMPT_VERSION.encode("utf-8"))
-        return self.cache_dir / f"{digest.hexdigest()}.txt"
+        return digest.hexdigest()
+
+    def _page_cache_path(self, path: Path, page_number: int) -> Path:
+        digest = self._cache_digest(path)[:20]
+        return self.cache_dir / f"page-{digest}-{page_number:04d}.txt"
+
+    def _blank_cache_path(self, path: Path, page_number: int) -> Path:
+        digest = self._cache_digest(path)[:20]
+        return self.cache_dir / f"blank-{digest}-{page_number:04d}.flag"
 
     def _write_cache(self, cache_path: Path, text: str) -> None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,87 +123,162 @@ class QwenOCRService:
             temporary.unlink(missing_ok=True)
 
     def _extract_with_qwen(self, path: Path) -> str:
-        file_url = self._upload_pdf(path)
-        return self._call_qwen(path.name, file_url)
+        native_pages = self._extract_native_pages(path)
+        extracted: dict[int, str] = {}
+        pages_requiring_images = []
+        for page_number, native_text in enumerate(native_pages, start=1):
+            if self._native_text_is_usable(native_text):
+                extracted[page_number] = native_text.strip()
+                continue
+            page_cache = self._read_page_cache(path, page_number)
+            if page_cache:
+                extracted[page_number] = page_cache
+            elif self._blank_cache_path(path, page_number).is_file():
+                extracted[page_number] = ""
+            else:
+                pages_requiring_images.append(page_number)
 
-    def _upload_pdf(self, path: Path) -> str:
-        session = self._http_session or requests.Session()
-        headers = {"Authorization": f"Bearer {self.api_key}"}
-        try:
-            policy_response = session.get(
-                UPLOAD_POLICY_URL,
-                headers=headers,
-                params={"action": "getPolicy", "model": self.model},
-                timeout=self.timeout_seconds,
-            )
-            policy_response.raise_for_status()
-            policy = policy_response.json()["data"]
-            key = f"{policy['upload_dir']}/{path.name}"
-        except (requests.RequestException, KeyError, TypeError, ValueError):
-            raise OCRExtractionError(
-                f"{path.name}: failed to obtain Qwen upload policy"
-            ) from None
-
-        try:
-            with path.open("rb") as pdf_stream:
-                files = {
-                    "OSSAccessKeyId": (None, policy["oss_access_key_id"]),
-                    "Signature": (None, policy["signature"]),
-                    "policy": (None, policy["policy"]),
-                    "x-oss-object-acl": (None, policy["x_oss_object_acl"]),
-                    "x-oss-forbid-overwrite": (
-                        None,
-                        policy["x_oss_forbid_overwrite"],
-                    ),
-                    "key": (None, key),
-                    "success_action_status": (None, "200"),
-                    "file": (path.name, pdf_stream, "application/pdf"),
-                }
-                upload_response = session.post(
-                    policy["upload_host"],
-                    files=files,
-                    timeout=self.timeout_seconds,
+        image_directory_exists = path.with_suffix("").is_dir()
+        if pages_requiring_images or image_directory_exists:
+            try:
+                image_paths = self._image_service.render_pages(
+                    path,
+                    page_numbers=pages_requiring_images,
+                    prune=True,
                 )
-                upload_response.raise_for_status()
-        except (requests.RequestException, KeyError, OSError, TypeError):
-            raise OCRExtractionError(
-                f"{path.name}: failed to upload PDF for OCR"
-            ) from None
-        return f"oss://{key}"
+            except PdfImageRenderError as exc:
+                raise OCRExtractionError(str(exc)) from None
+            except Exception:
+                raise OCRExtractionError(
+                    f"{path.name}: failed to render PDF pages"
+                ) from None
+            if len(image_paths) != len(pages_requiring_images):
+                raise OCRExtractionError(
+                    f"{path.name}: PDF rendering returned an unexpected page count"
+                )
+            for page_number, page_path in zip(
+                pages_requiring_images,
+                image_paths,
+                strict=True,
+            ):
+                if self._image_is_blank(page_path):
+                    page_path.unlink(missing_ok=True)
+                    self._write_cache(
+                        self._blank_cache_path(path, page_number),
+                        "blank",
+                    )
+                    extracted[page_number] = ""
+                    continue
+                page_text = self._extract_page(path.name, page_number, page_path)
+                self._write_cache(
+                    self._page_cache_path(path, page_number),
+                    page_text,
+                )
+                extracted[page_number] = page_text
 
-    def _call_qwen(self, document_name: str, file_url: str) -> str:
-        responses = self._responses_client
-        if responses is None:
+        ordered = []
+        for page_number in range(1, len(native_pages) + 1):
+            page_text = extracted[page_number]
+            if page_text:
+                ordered.append(f"【第 {page_number} 页】\n{page_text}")
+        return "\n\n".join(ordered)
+
+    @staticmethod
+    def _extract_native_pages(path: Path) -> list[str]:
+        reader = PdfReader(path)
+        pages = []
+        for page in reader.pages:
+            try:
+                pages.append(page.extract_text() or "")
+            except Exception:
+                pages.append("")
+        return pages
+
+    @staticmethod
+    def _native_text_is_usable(text: str) -> bool:
+        visible = "".join(character for character in text if not character.isspace())
+        if len(visible) < MIN_NATIVE_TEXT_CHARACTERS:
+            return False
+        return visible.count("\ufffd") / len(visible) < 0.05
+
+    def _read_page_cache(self, path: Path, page_number: int) -> str:
+        cache_path = self._page_cache_path(path, page_number)
+        try:
+            text = cache_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return ""
+        if any(marker in text for marker in INVALID_OUTPUT_MARKERS):
+            return ""
+        return text
+
+    @staticmethod
+    def _image_is_blank(path: Path) -> bool:
+        try:
+            with Image.open(path) as image:
+                grayscale = image.convert("L")
+                histogram = grayscale.histogram()
+                pixel_count = grayscale.width * grayscale.height
+        except (OSError, ValueError):
+            return False
+        ink_pixels = sum(histogram[:245])
+        return ink_pixels / pixel_count < MIN_IMAGE_INK_RATIO
+
+    def _extract_page(
+        self,
+        document_name: str,
+        page_number: int,
+        page_path: Path,
+    ) -> str:
+        encoded = base64.b64encode(page_path.read_bytes())
+        if len(encoded) > MAX_BASE64_IMAGE_BYTES:
+            raise OCRExtractionError(
+                f"{document_name}: page {page_number} exceeds the 10 MB Base64 limit"
+            )
+        data_url = f"data:image/jpeg;base64,{encoded.decode('ascii')}"
+        try:
+            completions = self._get_chat_client().chat.completions
+            response = completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": data_url},
+                            },
+                            {"type": "text", "text": LEGAL_OCR_PROMPT},
+                        ],
+                    }
+                ],
+            )
+            content = response.choices[0].message.content
+        except Exception as exc:
+            raise OCRExtractionError(
+                f"{document_name}: Qwen OCR request failed on page {page_number} "
+                f"({type(exc).__name__})"
+            ) from None
+
+        text = content.strip() if isinstance(content, str) else ""
+        if not text or any(marker in text for marker in INVALID_OUTPUT_MARKERS):
+            raise OCRExtractionError(
+                f"{document_name}: page {page_number} returned empty or invalid OCR text"
+            )
+        return text
+
+    def _get_chat_client(self):
+        if self._chat_client is None:
             try:
                 from openai import OpenAI
 
-                responses = OpenAI(
+                self._chat_client = OpenAI(
                     api_key=self.api_key,
                     base_url=self.base_url,
                     timeout=self.timeout_seconds,
                     max_retries=self.max_retries,
-                ).responses
+                )
             except Exception:
                 raise OCRExtractionError(
-                    f"{document_name}: failed to initialize Qwen OCR client"
+                    "failed to initialize Qwen OCR client"
                 ) from None
-        try:
-            response = responses.create(
-                model=self.model,
-                input=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "input_file", "file_url": file_url},
-                            {"type": "input_text", "text": LEGAL_OCR_PROMPT},
-                        ],
-                    }
-                ],
-                extra_body={"ocr_options": {"task": "document_parsing"}},
-            )
-        except Exception:
-            raise OCRExtractionError(
-                f"{document_name}: Qwen OCR request failed"
-            ) from None
-        output_text = getattr(response, "output_text", None)
-        return output_text.strip() if isinstance(output_text, str) else ""
+        return self._chat_client

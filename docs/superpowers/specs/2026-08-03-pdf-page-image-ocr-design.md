@@ -2,10 +2,9 @@
 
 ## 目标
 
-将法规 PDF 在本地逐页渲染为可查看的图片，再通过 Base64 调用
-`qwen3.5-ocr`，替换当前依赖临时 `oss://` 地址的实现。分页图片保留在
-PDF 同名目录中但不提交到 Git，OCR 成功文本继续缓存到
-`.runtime/ocr_cache/`。
+优先读取法规 PDF 的原生文字层；无文字层的页面先渲染并检测是否为空白，只有非空白
+扫描页才通过 Base64 调用 `qwen3.5-ocr`。分页图片保留在 PDF 同名目录中但不提交到
+Git，完整文档、空白页标记与成功的单页 OCR 文本缓存到 `.runtime/ocr_cache/`。
 
 ## 范围
 
@@ -25,7 +24,7 @@ PDF 同名目录中但不提交到 Git，OCR 成功文本继续缓存到
 新增 `PdfImageService`，只负责 PDF 页面渲染和本地图片复用：
 
 - 校验并接收已经确认可处理的 PDF；
-- 使用 `pypdfium2` 按 200 DPI 渲染页面；
+- 使用 `pypdfium2` 按 200 DPI 选择性渲染需要 OCR 的页面；
 - 以 JPEG 质量 90 输出 `page-0001.jpg` 等顺序文件；
 - 将图片写入 PDF 旁边的同名目录；
 - 在 `.pdf-pages.json` 记录 PDF SHA-256、页数、DPI、格式和渲染版本；
@@ -50,11 +49,12 @@ data/knowledge/laws/
 
 1. 校验 PDF；
 2. 优先读取现有 OCR 文本缓存；
-3. 缓存未命中时调用 `PdfImageService.render_pages()`；
-4. 逐页读取图片并构造 `data:image/jpeg;base64,...`；
-5. 通过 OpenAI 兼容的 `/chat/completions` 调用 `qwen3.5-ocr`；
-6. 从 `choices[0].message.content` 读取每页文字；
-7. 按页码顺序合并后原子写入 OCR 文本缓存。
+3. 缓存未命中时逐页读取 PDF 原生文字；
+4. 对无文字的页面调用 `PdfImageService.render_pages()`，同时裁剪历史残留图片；
+5. 跳过纯白页，将非空白扫描页构造为 `data:image/jpeg;base64,...`；
+6. 通过 OpenAI 兼容的 `/chat/completions` 调用 `qwen3.5-ocr`；
+7. 成功后立即写入单页 OCR 缓存；
+8. 按页码顺序合并后原子写入完整文档缓存。
 
 删除当前临时上传策略、OSS 上传和 `Responses API input_file` 代码。
 
@@ -65,8 +65,9 @@ PDF
   -> PDF 校验
   -> OCR 文本缓存命中？
        -> 是：直接返回文本
-       -> 否：校验或生成分页图片
-              -> 逐页 Base64 OCR
+       -> 否：逐页读取原生文字
+              -> 无有效文字的页面生成图片并 Base64 OCR
+              -> 写入单页 OCR 缓存
               -> 按页合并
               -> 写入文本缓存
   -> 法规分块
@@ -77,7 +78,8 @@ PDF
 
 - 文本缓存键继续包含 PDF 内容、模型名称和 OCR 提示词版本；
 - 文本缓存命中时，不检查或生成分页图片，也不调用 API；
-- 只删除文本缓存时，复用有效的分页图片并重新 OCR；
+- 单页 OCR 成功后立即缓存，后续页面失败不会丢失已完成结果；
+- 只删除完整文档缓存时，复用有效的原生文字和单页 OCR 缓存；
 - PDF 内容变化时，分页清单失效并重新渲染；
 - 模型或提示词变化时，分页图片仍可复用，但文本缓存失效；
 - 只有所有页面 OCR 成功后才写入最终文本缓存。

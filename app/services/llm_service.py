@@ -27,6 +27,7 @@ class LLMService:
             temperature=0,
             timeout=settings.deepseek_timeout_seconds,
             max_retries=settings.deepseek_max_retries,
+            extra_body={"thinking": {"type": "disabled"}},
         )
         self._structured_model = model.with_structured_output(
             ClassificationOutput,

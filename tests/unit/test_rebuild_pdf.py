@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.services.pdf_image_service import PdfImageService
 from scripts.rebuild_knowledge_base import (
     build_ocr_service,
     load_documents,
@@ -95,3 +96,9 @@ def test_build_ocr_service_requires_key_and_workspace_url(tmp_path):
 
     with pytest.raises(RuntimeError, match="QWEN_OCR_BASE_URL"):
         build_ocr_service(settings_for(tmp_path, base_url=""))
+
+
+def test_build_ocr_service_uses_local_pdf_image_renderer(tmp_path):
+    service = build_ocr_service(settings_for(tmp_path))
+
+    assert isinstance(service._image_service, PdfImageService)

@@ -28,10 +28,10 @@ CREATE TABLE IF NOT EXISTS `classification_run` (
 CREATE TABLE IF NOT EXISTS `data_field_asset` (
   `field_id` CHAR(36) NOT NULL,
   `source_system` VARCHAR(64) NOT NULL,
-  `database_name` VARCHAR(256) NOT NULL,
-  `table_name` VARCHAR(256) NOT NULL,
+  `database_name` VARCHAR(64) NOT NULL,
+  `table_name` VARCHAR(64) NOT NULL,
   `table_comment` TEXT NULL,
-  `column_name` VARCHAR(256) NOT NULL,
+  `column_name` VARCHAR(64) NOT NULL,
   `column_comment` TEXT NULL,
   `data_type` VARCHAR(256) NOT NULL,
   `is_nullable` BOOLEAN NOT NULL,

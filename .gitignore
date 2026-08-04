@@ -23,6 +23,9 @@ venv/
 outputs/
 logs/
 
+data/knowledge/laws/*/page-*.jpg
+data/knowledge/laws/*/.pdf-pages.json
+
 *.sqlite
 *.sqlite3
 *.db

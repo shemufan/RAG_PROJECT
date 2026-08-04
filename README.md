@@ -135,12 +135,28 @@ data/knowledge/laws/*.txt
 data/knowledge/laws/*.pdf
 ```
 
-PDF 会先上传至阿里云百炼临时存储，由 `qwen3.5-ocr` 完成文档解析，再进入与 TXT
-相同的法规分块、Embedding 和 Chroma 流程。单个 PDF 必须未加密、包含 1–50 页且不超过
-100 MB。上传 PDF 前必须确认该文档允许离开本机并由阿里云百炼处理。
+PDF 会先逐页读取自身文字层。存在有效文字的页面直接使用；没有文字层的页面会在本地
+渲染为 JPEG 并检测墨迹，真正的空白页直接跳过，只有非空白扫描页才以 Base64 发送给
+`qwen3.5-ocr`。有效页面最后按页码合并，再进入与 TXT 相同的法规分块、Embedding 和
+Chroma 流程。单个 PDF 必须未加密、包含 1–50 页且不超过 100 MB。调用 OCR 前必须确认
+扫描页允许由阿里云百炼处理。
 
-OCR 结果按 PDF 内容、模型名称和 Prompt 版本缓存在 `.runtime/ocr_cache/`。文件未变化时
-重建不会重复调用付费 OCR；PDF、模型或 Prompt 变化会自动生成新缓存。
+分页图片保存在 PDF 旁边的同名目录中，例如：
+
+```text
+data/knowledge/laws/个人信息安全规范.pdf
+data/knowledge/laws/个人信息安全规范/page-0001.jpg
+data/knowledge/laws/个人信息安全规范/page-0002.jpg
+```
+
+这些图片只会为需要 OCR 的非空白页面保留，是可重新生成的本地运行产物，已被 Git
+忽略。每次处理会裁剪历史残留图片，只保留当前实际需要 OCR 的页，不需要 OSS 或公开
+文件地址。
+
+完整文档和单页 OCR 结果都按 PDF 内容、模型名称和 Prompt 版本缓存在
+`.runtime/ocr_cache/`。文本缓存命中时不会重新解析或调用付费 OCR；中途某页失败时，
+已经成功的 OCR 页面会保留，下次重建只继续处理尚未完成的页面。PDF 内容变化时相关缓存
+和分页图片会自动失效。
 
 更新法规的推荐顺序：
 
@@ -248,8 +264,8 @@ $env:QWEN_OCR_MODEL = "qwen3.5-ocr"
 pytest -q tests/integration/test_qwen_ocr_integration.py -rs
 ```
 
-未显式设置 `RUN_QWEN_OCR_INTEGRATION=1` 时不会发起千问请求。当前临时上传方案适合受控、
-低频的同步知识库重建；生产高并发摄取应改用正式 OSS、访问控制和保留策略。
+未显式设置 `RUN_QWEN_OCR_INTEGRATION=1` 时不会发起千问请求。当前逐页同步 OCR 方案适合
+受控、低频的知识库重建；生产高并发摄取仍需补充任务队列、限流和失败恢复。
 
 ## 当前阶段边界
 
