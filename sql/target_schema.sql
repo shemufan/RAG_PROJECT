@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS `field_classification_result` (
   `field_id` CHAR(36) NOT NULL,
   `category` VARCHAR(256) NOT NULL,
   `subcategory` VARCHAR(256) NULL,
+  `is_personal` BOOLEAN NOT NULL,
   `level` VARCHAR(2) NOT NULL,
   `confidence` DECIMAL(6, 5) NOT NULL,
   `reason` TEXT NOT NULL,

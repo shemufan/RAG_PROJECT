@@ -143,11 +143,11 @@ class TargetMySQLRepository:
         result_statement = text(
             """
             INSERT INTO field_classification_result (
-                run_id, field_id, category, subcategory, level, confidence,
+                run_id, field_id, category, subcategory, is_personal, level, confidence,
                 reason, need_review, decision_path, input_snapshot_json,
                 raw_output_json, created_at
             ) VALUES (
-                :run_id, :field_id, :category, :subcategory, :level, :confidence,
+                :run_id, :field_id, :category, :subcategory, :is_personal, :level, :confidence,
                 :reason, :need_review, :decision_path, :input_snapshot_json,
                 :raw_output_json, :created_at
             )
@@ -215,6 +215,7 @@ class TargetMySQLRepository:
         level: str | None = None,
         category: str | None = None,
         need_review: bool | None = None,
+        is_personal: bool | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ClassificationResultRow]:
@@ -228,6 +229,7 @@ class TargetMySQLRepository:
             "r.level": ("level", level),
             "r.category": ("category", category),
             "r.need_review": ("need_review", need_review),
+            "r.is_personal": ("is_personal", is_personal),
         }
         for column, (name, value) in optional_filters.items():
             if value is not None:
@@ -239,7 +241,7 @@ class TargetMySQLRepository:
             SELECT r.result_id, r.run_id, r.field_id,
                    a.source_system, a.database_name, a.table_name,
                    a.column_name, a.business_domain,
-                   r.category, r.subcategory, r.level, r.confidence,
+                   r.category, r.subcategory, r.is_personal, r.level, r.confidence,
                    r.reason, r.need_review, r.decision_path, r.created_at
             FROM field_classification_result AS r
             JOIN data_field_asset AS a ON a.field_id = r.field_id
@@ -281,6 +283,7 @@ class TargetMySQLRepository:
             "field_id": str(record.field_id),
             "category": classification.category,
             "subcategory": classification.subcategory,
+            "is_personal": classification.is_personal,
             "level": classification.level,
             "confidence": classification.confidence,
             "reason": classification.reason,

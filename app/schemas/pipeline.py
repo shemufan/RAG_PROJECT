@@ -89,6 +89,7 @@ class ClassificationResultRow(BaseModel):
     business_domain: str
     category: str
     subcategory: str | None = None
+    is_personal: bool | None = None
     level: ClassificationLevel
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str

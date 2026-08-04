@@ -86,6 +86,7 @@ def query_results(
     level: Literal["L1", "L2", "L3", "L4"] | None = None,
     category: str | None = None,
     need_review: bool | None = None,
+    is_personal: bool | None = None,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     repository: TargetMySQLRepository = Depends(get_target_repository),
@@ -98,6 +99,7 @@ def query_results(
         level=level,
         category=category,
         need_review=need_review,
+        is_personal=is_personal,
         limit=limit,
         offset=offset,
     )

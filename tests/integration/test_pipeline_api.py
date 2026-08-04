@@ -123,7 +123,7 @@ def test_results_query_validates_and_forwards_filters():
         invalid = client.get("/api/results?limit=201")
         valid = client.get(
             "/api/results?database_name=enterprise_source&table_name=employee"
-            "&level=L4&need_review=true&limit=20&offset=5"
+            "&level=L4&need_review=true&is_personal=true&limit=20&offset=5"
         )
 
     assert invalid.status_code == 422
@@ -132,6 +132,7 @@ def test_results_query_validates_and_forwards_filters():
     assert target.result_filters["table_name"] == "employee"
     assert target.result_filters["level"] == "L4"
     assert target.result_filters["need_review"] is True
+    assert target.result_filters["is_personal"] is True
     assert target.result_filters["limit"] == 20
     assert target.result_filters["offset"] == 5
 

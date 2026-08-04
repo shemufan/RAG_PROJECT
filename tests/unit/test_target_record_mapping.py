@@ -146,6 +146,7 @@ def test_target_repository_maps_asset_and_record_to_relational_columns():
     assert asset["database_name"] == "enterprise_source"
     result = parameters_for(engine.connection, "INSERT INTO field_classification_result")
     assert result["level"] == "L4"
+    assert result["is_personal"] is True
     assert json.loads(result["input_snapshot_json"])["schema_version"] == "1.0"
     evidence = parameters_for(engine.connection, "INSERT INTO classification_evidence")
     assert evidence[0]["rank_no"] == 1

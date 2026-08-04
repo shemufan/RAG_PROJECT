@@ -53,6 +53,7 @@ def test_target_schema_has_required_tables_constraints_and_indexes():
     assert "unique key uq_field_identity" in sql
     assert "unique key uq_run_field" in sql
     assert "on delete cascade" in sql
+    assert "is_personal boolean not null" in sql
     for index_name in (
         "idx_run_status",
         "idx_run_started_at",
@@ -66,6 +67,17 @@ def test_target_schema_has_required_tables_constraints_and_indexes():
         "idx_evidence_document_name",
     ):
         assert index_name in sql
+
+
+def test_benchmark_schema_files_define_source_and_target_tables():
+    source = normalized(read_sql("benchmark_source_schema.sql"))
+    target = normalized(read_sql("benchmark_target_schema.sql"))
+
+    assert "create table if not exists benchmark_field_input" in source
+    assert "unique key uq_benchmark_source_row" in source
+    assert "create table if not exists benchmark_run" in target
+    assert "create table if not exists benchmark_prediction" in target
+    assert "unique key uq_benchmark_run_case" in target
 
 
 def test_query_examples_cover_ten_documented_queries():
