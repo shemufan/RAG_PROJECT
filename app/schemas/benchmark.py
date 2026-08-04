@@ -106,3 +106,27 @@ class BenchmarkPrediction(BaseModel):
             expected_personal=self.expected_personal,
             predicted_personal=self.predicted_personal,
         )
+
+
+class BenchmarkPredictionRow(BaseModel):
+    """Validated read model for one persisted benchmark prediction."""
+
+    prediction_id: int
+    run_id: UUID
+    benchmark_id: int
+    field_name_snapshot: str
+    sample_values: list[str] = Field(default_factory=list)
+    expected_personal: bool
+    predicted_personal: bool | None = None
+    outcome: Literal["TP", "FP", "TN", "FN", "FAILED"]
+    category: str | None = None
+    subcategory: str | None = None
+    level: str | None = None
+    confidence: float | None = None
+    reason: str | None = None
+    need_review: bool | None = None
+    decision_path: str | None = None
+    evidence: list[Evidence] = Field(default_factory=list)
+    status: Literal["SUCCESS", "FAILED"]
+    error_message: str | None = None
+    created_at: datetime

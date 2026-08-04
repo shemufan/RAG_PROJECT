@@ -35,6 +35,7 @@ def create_app(lifespan: Callable = app_lifespan) -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+    from app.api.benchmark import router as benchmark_router
     from app.api.classification import router as classification_router
     from app.api.health import router as health_router
     from app.api.pipeline import router as pipeline_router
@@ -42,6 +43,7 @@ def create_app(lifespan: Callable = app_lifespan) -> FastAPI:
     application.include_router(health_router, prefix="/api")
     application.include_router(classification_router, prefix="/api")
     application.include_router(pipeline_router, prefix="/api")
+    application.include_router(benchmark_router, prefix="/api")
     return application
 
 

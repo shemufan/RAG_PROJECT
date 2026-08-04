@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.schemas.benchmark import (
     BenchmarkMetricInput,
     BenchmarkPrediction,
+    BenchmarkPredictionRow,
     BenchmarkRunSummary,
 )
 
@@ -147,7 +148,7 @@ class BenchmarkTargetRepository:
         need_review: bool | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[dict]:
+    ) -> list[BenchmarkPredictionRow]:
         filters = ["run_id=:run_id"]
         parameters = {"run_id": str(run_id), "limit": limit, "offset": offset}
         for column, value in (
@@ -165,7 +166,7 @@ class BenchmarkTargetRepository:
         )
         with self.engine.connect() as connection:
             rows = connection.execute(statement, parameters).mappings().all()
-        return [dict(row) for row in rows]
+        return [self._map_prediction_row(row) for row in rows]
 
     def _write(self, operation: str, statement, parameters) -> None:
         try:
@@ -179,3 +180,16 @@ class BenchmarkTargetRepository:
         values = summary.model_dump()
         values["run_id"] = str(summary.run_id)
         return values
+
+    @staticmethod
+    def _map_prediction_row(row) -> BenchmarkPredictionRow:
+        values = dict(row)
+        sample_values = values.pop("sample_values_json", [])
+        evidence = values.pop("evidence_json", [])
+        if isinstance(sample_values, str):
+            sample_values = json.loads(sample_values)
+        if isinstance(evidence, str):
+            evidence = json.loads(evidence)
+        values["sample_values"] = sample_values or []
+        values["evidence"] = evidence or []
+        return BenchmarkPredictionRow.model_validate(values)
