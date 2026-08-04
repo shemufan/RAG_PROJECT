@@ -105,11 +105,13 @@ python -m scripts.import_benchmark_data `
 
 ## 7. 分类模型调整
 
-在 `ClassificationOutput` 和 `ClassificationResult` 中新增：
+在成功的 LLM 结构化输出 `ClassificationOutput` 中新增：
 
 ```python
 is_personal: bool
 ```
+
+对外编排结果 `ClassificationResult` 使用 `is_personal: bool | None`：成功分类必须为布尔值；现有异常降级结果 `level="UNKNOWN"` 必须为 `None`，不得把无法判断伪装成“非个人信息”。Benchmark 收到 `None` 时将该案例记录为 `FAILED`。
 
 Prompt 明确要求：依据字段名、样例和检索法规判断字段是否属于个人信息，并继续输出现有分类、细分类、L1-L4、置信度、理由和复核标记。
 
