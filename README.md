@@ -125,6 +125,95 @@ cmd /c "mysql -u root -p < sql\target_schema.sql"
 
 `source_seed.sql` 为四张业务表各写入 5 条完全虚构的 Demo 数据。也可以在 MySQL Workbench 中按相同顺序执行三个文件。
 
+已有 B 库从旧版本升级时，仅执行一次以下迁移；全新执行过当前
+`sql/target_schema.sql` 的数据库已经包含该列，不要重复迁移：
+
+```powershell
+cmd /c "mysql -u root -p compliance_result < sql\migrations\2026-08-04_add_is_personal.sql"
+```
+
+## 个人信息字段 Benchmark
+
+Benchmark 用两份已标注 CSV 检验系统能否在大量非个人信息字段中识别个人信息。CSV
+只负责一次性导入；正式评测始终从 A 库逐行读取测试案例，经现有 Chroma + LLM 链路
+分类，再将逐案例结果和评分写入 B 库。真实标签不会进入 `FieldProfile`、检索文本或
+Prompt。
+
+### 1. 建表
+
+先确保 `enterprise_source` 和 `compliance_result` 已按上文建立，再分别增加 Benchmark
+表：
+
+```powershell
+cmd /c "mysql -u root -p < sql\benchmark_source_schema.sql"
+cmd /c "mysql -u root -p < sql\benchmark_target_schema.sql"
+```
+
+- A.`benchmark_field_input`：保存 CSV 原始字段名、最多 5 个脱敏样例和真实标签；同名字段
+  不合并。
+- B.`benchmark_prediction`：保存每个案例的预测、TP/FP/TN/FN/FAILED、分类详情和法规依据。
+- B.`benchmark_run`：保存任务状态、混淆矩阵和最终指标。
+
+### 2. 导入两份 CSV
+
+CSV 保留在仓库外部，不提交 Git。导入会自动尝试 UTF-8 BOM、UTF-8 和 GB18030；第一列
+必须为 `字段名`，后续 `样本N` 列作为脱敏样例。两份文件先全部校验，再在同一事务写入 A；
+重复执行同一批次只报告 `skipped`，不会删除或覆盖既有案例。
+
+```powershell
+python -m scripts.import_benchmark_data `
+  --personal "D:\benchmark\个人信息_脱敏.csv" `
+  --non-personal "D:\benchmark\非个人信息字段_脱敏.csv" `
+  --batch teacher_2026_08
+```
+
+### 3. 运行评测
+
+先用同时包含正负样本的小批量验证配置和费用，再决定是否全量运行：
+
+```powershell
+# 小批量：20 个个人信息案例 + 80 个非个人信息案例
+python -m scripts.run_benchmark `
+  --batch teacher_2026_08 `
+  --personal-limit 20 `
+  --non-personal-limit 80
+
+# 全量新任务（会逐案例调用 LLM，可能耗时并产生费用）
+python -m scripts.run_benchmark --batch teacher_2026_08
+
+# 继续中断任务；默认只处理尚未写入 B 的案例
+python -m scripts.run_benchmark --resume-run <run_id>
+
+# 继续任务并额外重试失败案例；成功案例不会重复调用
+python -m scripts.run_benchmark --resume-run <run_id> --retry-failed
+```
+
+Runner 每处理一个案例立即写入 B，单个分类失败会记录为 `FAILED` 并继续。终端输出
+run ID、案例数、混淆矩阵、Precision、Recall、F1、Accuracy、Coverage 和 Effective
+Recall，不输出脱敏样例。
+
+### 4. 指标与查询
+
+- Precision：预测为个人信息的案例中，有多少确实是个人信息。
+- Recall：成功分类的真实个人信息中，有多少被识别。
+- F1：Precision 与 Recall 的调和平均。
+- Accuracy：成功案例中的总体正确率；类别不平衡时仅作辅助。
+- Coverage：成功分类数 / 本次选取总数。
+- Effective Recall：TP / 本次选取的全部真实个人信息数，会把执行失败造成的漏识别计入。
+
+启动 FastAPI 后可查看汇总和错误案例：
+
+```text
+GET /api/benchmark/runs/{run_id}
+GET /api/benchmark/results?run_id={run_id}&outcome=FN&limit=100
+GET /api/benchmark/results?run_id={run_id}&outcome=FP&need_review=true
+GET /api/benchmark/results?run_id={run_id}&outcome=FAILED
+```
+
+Benchmark 长任务只通过 CLI 启动；FastAPI 接口只读，避免让长时间付费调用占用 HTTP
+请求。建议演示顺序为：展示 A 输入数量与标签分布 → 运行分层小批量 → 展示终端评分 →
+通过 API/Swagger 展示 FN、FP、失败原因、分类理由和法规依据。
+
 ## 重建法规知识库
 
 法规目录原生支持：
@@ -205,7 +294,7 @@ Invoke-RestMethod -Method Post `
 
 ```text
 GET /api/runs/{run_id}
-GET /api/results?run_id=&database_name=&table_name=&column_name=&level=&category=&need_review=&limit=&offset=
+GET /api/results?run_id=&database_name=&table_name=&column_name=&level=&category=&need_review=&is_personal=&limit=&offset=
 GET /api/results/{result_id}/evidence
 ```
 
@@ -269,4 +358,6 @@ pytest -q tests/integration/test_qwen_ocr_integration.py -rs
 
 ## 当前阶段边界
 
-当前实现面向同步 Demo：一次请求扫描一组字段并逐字段分类写入。生产化阶段仍需根据数据规模补充任务调度、限流、凭据管理、运行恢复和知识库版本切换，但这些能力不属于当前阶段。
+当前实现面向受控 Demo：业务字段扫描仍是同步请求；Benchmark 使用可恢复的本地串行
+Runner。系统尚未实现后台任务队列、并发限流、Web 前端或生产级凭据管理。全量 Benchmark
+会产生真实 LLM 调用费用，应先完成小批量验证并单独确认预算。
