@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.schemas.benchmark import BenchmarkImportRow
+from app.schemas.benchmark import (
+    BenchmarkCase,
+    BenchmarkImportRow,
+    BenchmarkImportSummary,
+)
+from app.schemas.field import FieldProfile
 
 
 class BenchmarkSourceError(RuntimeError):
@@ -27,7 +32,7 @@ class BenchmarkSourceRepository:
         self,
         batch_name: str,
         rows: list[BenchmarkImportRow],
-    ) -> int:
+    ) -> BenchmarkImportSummary:
         """Insert a fully parsed batch in one transaction and keep duplicates by row."""
         statement = text(
             """
@@ -59,10 +64,65 @@ class BenchmarkSourceRepository:
             for row in rows
         ]
         if not parameters:
-            return 0
+            return BenchmarkImportSummary(processed=0, inserted=0, skipped=0)
         try:
             with self.engine.begin() as connection:
-                connection.execute(statement, parameters)
+                result = connection.execute(statement, parameters)
         except SQLAlchemyError as exc:
             raise BenchmarkSourceError("failed to import benchmark batch") from exc
-        return len(parameters)
+        inserted = max(0, min(len(parameters), result.rowcount))
+        return BenchmarkImportSummary(
+            processed=len(parameters),
+            inserted=inserted,
+            skipped=len(parameters) - inserted,
+        )
+
+    def list_cases(
+        self,
+        batch_name: str,
+        personal_limit: int | None = None,
+        non_personal_limit: int | None = None,
+    ) -> list[BenchmarkCase]:
+        """Return deterministic positive and negative cases without label leakage."""
+        statement = text(
+            """
+            SELECT benchmark_id, batch_name, field_name,
+                   sample_values_json, expected_personal
+            FROM benchmark_field_input
+            WHERE batch_name = :batch_name
+            ORDER BY benchmark_id
+            """
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                statement,
+                {"batch_name": batch_name},
+            ).mappings().all()
+        cases = [self._map_case(row) for row in rows]
+        personal = [case for case in cases if case.expected_personal]
+        non_personal = [case for case in cases if not case.expected_personal]
+        if personal_limit is not None:
+            personal = personal[:personal_limit]
+        if non_personal_limit is not None:
+            non_personal = non_personal[:non_personal_limit]
+        return [*personal, *non_personal]
+
+    @staticmethod
+    def _map_case(row) -> BenchmarkCase:
+        samples = row["sample_values_json"]
+        if isinstance(samples, str):
+            samples = json.loads(samples)
+        return BenchmarkCase(
+            benchmark_id=row["benchmark_id"],
+            batch_name=row["batch_name"],
+            expected_personal=bool(row["expected_personal"]),
+            field_profile=FieldProfile(
+                source_system="benchmark",
+                database_name="teacher_benchmark",
+                table_name="benchmark_input",
+                field_name=row["field_name"],
+                sample_values=samples,
+                data_type="unknown",
+                business_domain="general",
+            ),
+        )

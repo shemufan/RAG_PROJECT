@@ -26,10 +26,13 @@ def main() -> None:
         source_dataset="non_personal",
     )
     repository = BenchmarkSourceRepository(settings.source_database_url)
-    total = repository.import_batch(args.batch, [*personal, *non_personal])
+    summary = repository.import_batch(args.batch, [*personal, *non_personal])
+    empty_samples = sum(not row.sample_values for row in [*personal, *non_personal])
     print(
         f"Imported benchmark batch {args.batch}: "
-        f"personal={len(personal)}, non_personal={len(non_personal)}, total={total}"
+        f"personal={len(personal)}, non_personal={len(non_personal)}, "
+        f"inserted={summary.inserted}, skipped={summary.skipped}, "
+        f"empty_samples={empty_samples}"
     )
 
 

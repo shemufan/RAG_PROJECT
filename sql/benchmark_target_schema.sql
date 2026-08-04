@@ -3,6 +3,8 @@ USE `compliance_result`;
 CREATE TABLE IF NOT EXISTS `benchmark_run` (
   `run_id` CHAR(36) NOT NULL,
   `batch_name` VARCHAR(64) NOT NULL,
+  `personal_limit` INT NULL,
+  `non_personal_limit` INT NULL,
   `status` VARCHAR(32) NOT NULL,
   `total_cases` INT NOT NULL DEFAULT 0,
   `success_cases` INT NOT NULL DEFAULT 0,

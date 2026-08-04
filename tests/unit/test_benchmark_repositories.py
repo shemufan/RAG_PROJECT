@@ -1,12 +1,20 @@
 import json
 from contextlib import nullcontext
+from datetime import datetime, timezone
+from uuid import UUID
 
 from app.repositories.benchmark_source import BenchmarkSourceRepository
-from app.schemas.benchmark import BenchmarkImportRow
+from app.repositories.benchmark_target import BenchmarkTargetRepository
+from app.schemas.benchmark import (
+    BenchmarkImportRow,
+    BenchmarkPrediction,
+    BenchmarkRunSummary,
+)
 
 
 class Result:
-    rowcount = 2
+    def __init__(self, rowcount=2):
+        self.rowcount = rowcount
 
 
 class RecordingConnection:
@@ -48,11 +56,56 @@ def test_source_repository_imports_both_labels_in_one_transaction():
         ),
     ]
 
-    imported = repository.import_batch("teacher_2026_08", rows)
+    summary = repository.import_batch("teacher_2026_08", rows)
 
-    assert imported == 2
+    assert summary.inserted == 2
+    assert summary.skipped == 0
     assert engine.begin_count == 1
     _, parameters = engine.connection.calls[0]
     assert len(parameters) == 2
     assert parameters[0]["expected_personal"] is True
     assert json.loads(parameters[1]["sample_values_json"]) == ["2026-08-01"]
+
+
+def test_target_repository_maps_run_and_prediction_to_relational_parameters():
+    engine = RecordingEngine()
+    repository = BenchmarkTargetRepository(engine=engine)
+    now = datetime(2026, 8, 4, tzinfo=timezone.utc)
+    run_id = UUID("12345678-1234-5678-1234-567812345678")
+    summary = BenchmarkRunSummary(
+        run_id=run_id,
+        batch_name="teacher_2026_08",
+        personal_limit=20,
+        non_personal_limit=80,
+        status="RUNNING",
+        total_cases=100,
+        model_name="fake",
+        knowledge_base_version="v-test",
+        started_at=now,
+    )
+    prediction = BenchmarkPrediction(
+        run_id=run_id,
+        benchmark_id=7,
+        field_name_snapshot="email",
+        sample_values=["a***@x.test"],
+        expected_personal=True,
+        predicted_personal=True,
+        outcome="TP",
+        category="个人信息",
+        level="L2",
+        confidence=0.9,
+        reason="test",
+        need_review=False,
+        decision_path="rag_llm",
+        status="SUCCESS",
+        created_at=now,
+    )
+
+    repository.create_run(summary)
+    repository.save_prediction(prediction)
+
+    run_params = engine.connection.calls[0][1]
+    prediction_params = engine.connection.calls[1][1]
+    assert run_params["personal_limit"] == 20
+    assert prediction_params["predicted_personal"] is True
+    assert json.loads(prediction_params["sample_values_json"]) == ["a***@x.test"]
