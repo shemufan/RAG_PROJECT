@@ -38,6 +38,7 @@ def make_record() -> FieldClassificationRecord:
         field_id=stable_field_id(profile),
         field_profile=profile,
         classification=ClassificationOutput(
+            is_personal=True,
             category="个人信息",
             subcategory="身份标识",
             level="L4",

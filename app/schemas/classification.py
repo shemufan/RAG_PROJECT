@@ -18,6 +18,7 @@ class Evidence(BaseModel):
 class ClassificationOutput(BaseModel):
     """Strict structure returned by the language model."""
 
+    is_personal: bool
     category: str
     subcategory: str | None = None
     level: Literal["L1", "L2", "L3", "L4"]
@@ -30,6 +31,7 @@ class ClassificationResult(BaseModel):
     """Complete API result including retrieval evidence."""
 
     field_name: str
+    is_personal: bool | None = None
     category: str
     subcategory: str | None = None
     level: Literal["L1", "L2", "L3", "L4", "UNKNOWN"]

@@ -58,6 +58,7 @@ def test_embedding_and_llm_services_accept_injected_clients():
         def invoke(self, messages):
             assert messages == ["prompt"]
             return {
+                "is_personal": False,
                 "category": "业务经营数据",
                 "subcategory": None,
                 "level": "L2",
@@ -102,6 +103,7 @@ def test_classification_service_returns_structured_result():
     )
     llm = FakeLanguageModel(
         ClassificationOutput(
+            is_personal=True,
             category="敏感个人信息",
             subcategory="身份标识",
             level="L4",
@@ -120,6 +122,7 @@ def test_classification_service_returns_structured_result():
     assert "身份证号" in store.query
     assert "身份证件号码属于敏感个人信息" in llm.prompt[1].content
     assert result.level == "L4"
+    assert result.is_personal is True
     assert result.decision_path == "rag_llm"
 
 
@@ -132,6 +135,7 @@ def test_classification_service_returns_unknown_when_dependency_fails():
     result = service.classify_field(FieldProfile(field_name="unknown_field"))
 
     assert result.level == "UNKNOWN"
+    assert result.is_personal is None
     assert result.need_review is True
     assert result.decision_path == "rag_llm_error"
     assert result.reason == "分类处理失败，请进行人工复核。"

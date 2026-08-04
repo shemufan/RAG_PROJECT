@@ -103,6 +103,7 @@ def test_real_mysql_scan_persist_and_query_cycle():
             field_id=field_id,
             field_profile=profile,
             classification=ClassificationOutput(
+                is_personal=True,
                 category="个人信息",
                 subcategory="身份标识",
                 level="L4",

@@ -52,6 +52,7 @@ def test_field_profile_rejects_empty_physical_identity(field):
 def test_classification_output_rejects_invalid_level_and_confidence():
     with pytest.raises(ValidationError):
         ClassificationOutput(
+            is_personal=True,
             category="个人信息",
             level="L5",
             confidence=1.1,
@@ -71,6 +72,7 @@ def test_classification_result_keeps_retrieval_evidence():
 
     result = ClassificationResult(
         field_name="id_card",
+        is_personal=True,
         category="敏感个人信息",
         subcategory="身份标识",
         level="L4",
@@ -82,3 +84,4 @@ def test_classification_result_keeps_retrieval_evidence():
     )
 
     assert result.evidence[0].chunk_id == "chunk-1"
+    assert result.is_personal is True

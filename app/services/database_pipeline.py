@@ -95,6 +95,7 @@ class DatabaseClassificationPipeline:
                 if result.level == "UNKNOWN":
                     raise RuntimeError("classification returned UNKNOWN")
                 classification = ClassificationOutput(
+                    is_personal=result.is_personal,
                     category=result.category,
                     subcategory=result.subcategory,
                     level=result.level,

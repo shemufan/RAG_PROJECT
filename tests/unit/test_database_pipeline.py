@@ -20,6 +20,7 @@ def make_profile(field_name: str) -> FieldProfile:
 def make_result(field_name: str, *, need_review: bool = False) -> ClassificationResult:
     return ClassificationResult(
         field_name=field_name,
+        is_personal=True,
         category="个人信息",
         subcategory="身份标识",
         level="L3",
@@ -37,6 +38,7 @@ def make_result(field_name: str, *, need_review: bool = False) -> Classification
 def unknown_result(field_name: str) -> ClassificationResult:
     return ClassificationResult(
         field_name=field_name,
+        is_personal=None,
         category="未知",
         level="UNKNOWN",
         confidence=0.0,

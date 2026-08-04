@@ -18,6 +18,9 @@ def test_prompt_contains_validated_field_and_evidence():
     )
 
     assert [message.type for message in messages] == ["system", "human"]
+    assert "is_personal" in messages[0].content
+    assert "expected_personal" not in messages[0].content
+    assert "expected_personal" not in messages[1].content
     assert '"field_name": "id_card"' in messages[1].content
     assert "身份证件号码属于敏感个人信息" in messages[1].content
     assert "仅返回符合结构定义的结果" in messages[0].content

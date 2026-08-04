@@ -41,6 +41,7 @@ class FieldClassificationService:
             )
             return ClassificationResult(
                 field_name=profile.field_name,
+                is_personal=output.is_personal,
                 category=output.category,
                 subcategory=output.subcategory,
                 level=output.level,
@@ -54,6 +55,7 @@ class FieldClassificationService:
             logger.exception("字段 %s 分类失败", profile.field_name)
             return ClassificationResult(
                 field_name=profile.field_name,
+                is_personal=None,
                 category="未知",
                 level="UNKNOWN",
                 confidence=0.0,

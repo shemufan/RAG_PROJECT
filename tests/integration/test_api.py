@@ -11,6 +11,7 @@ class FakeClassificationService:
     def classify_field(self, field):
         return ClassificationResult(
             field_name=field.field_name,
+            is_personal=True,
             category="敏感个人信息",
             subcategory="身份标识",
             level="L4",
