@@ -32,14 +32,18 @@ class BenchmarkTargetRepository:
         statement = text(
             """
             INSERT INTO benchmark_run (
-                run_id, batch_name, personal_limit, non_personal_limit, status,
-                total_cases, success_cases, failed_cases, tp, fp, tn, fn,
+                run_id, batch_name, personal_limit, non_personal_limit,
+                source_type, input_mode, source_name, source_fingerprint,
+                label_fingerprint, status, total_cases, success_cases,
+                failed_cases, labeled_cases, unlabeled_cases, tp, fp, tn, fn,
                 precision_score, recall_score, f1_score, accuracy_score,
                 coverage_score, effective_recall_score, model_name,
                 knowledge_base_version, started_at, finished_at, error_message
             ) VALUES (
-                :run_id, :batch_name, :personal_limit, :non_personal_limit, :status,
-                :total_cases, :success_cases, :failed_cases, :tp, :fp, :tn, :fn,
+                :run_id, :batch_name, :personal_limit, :non_personal_limit,
+                :source_type, :input_mode, :source_name, :source_fingerprint,
+                :label_fingerprint, :status, :total_cases, :success_cases,
+                :failed_cases, :labeled_cases, :unlabeled_cases, :tp, :fp, :tn, :fn,
                 :precision_score, :recall_score, :f1_score, :accuracy_score,
                 :coverage_score, :effective_recall_score, :model_name,
                 :knowledge_base_version, :started_at, :finished_at, :error_message
@@ -54,6 +58,7 @@ class BenchmarkTargetRepository:
             UPDATE benchmark_run SET
                 status=:status, total_cases=:total_cases,
                 success_cases=:success_cases, failed_cases=:failed_cases,
+                labeled_cases=:labeled_cases, unlabeled_cases=:unlabeled_cases,
                 tp=:tp, fp=:fp, tn=:tn, fn=:fn,
                 precision_score=:precision_score, recall_score=:recall_score,
                 f1_score=:f1_score, accuracy_score=:accuracy_score,

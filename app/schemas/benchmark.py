@@ -42,7 +42,7 @@ class BenchmarkCase(BaseModel):
 class BenchmarkMetricInput(BaseModel):
     """Minimal prediction state consumed by the pure evaluator."""
 
-    expected_personal: bool
+    expected_personal: bool | None
     predicted_personal: bool | None
 
 
@@ -52,16 +52,18 @@ class BenchmarkMetrics(BaseModel):
     total_cases: int = 0
     success_cases: int = 0
     failed_cases: int = 0
+    labeled_cases: int = 0
+    unlabeled_cases: int = 0
     tp: int = 0
     fp: int = 0
     tn: int = 0
     fn: int = 0
-    precision_score: float = 0.0
-    recall_score: float = 0.0
-    f1_score: float = 0.0
-    accuracy_score: float = 0.0
+    precision_score: float | None = 0.0
+    recall_score: float | None = 0.0
+    f1_score: float | None = 0.0
+    accuracy_score: float | None = 0.0
     coverage_score: float = 0.0
-    effective_recall_score: float = 0.0
+    effective_recall_score: float | None = 0.0
 
 
 class BenchmarkRunSummary(BenchmarkMetrics):
@@ -71,6 +73,11 @@ class BenchmarkRunSummary(BenchmarkMetrics):
     batch_name: str
     personal_limit: int | None = None
     non_personal_limit: int | None = None
+    source_type: Literal["mysql_benchmark", "csv"] = "mysql_benchmark"
+    input_mode: Literal["catalog", "tabular"] | None = None
+    source_name: str | None = None
+    source_fingerprint: str | None = None
+    label_fingerprint: str | None = None
     status: Literal["RUNNING", "SUCCESS", "PARTIAL_FAILED", "FAILED"]
     model_name: str
     knowledge_base_version: str
@@ -86,9 +93,9 @@ class BenchmarkPrediction(BaseModel):
     benchmark_id: int
     field_name_snapshot: str
     sample_values: list[str] = Field(default_factory=list)
-    expected_personal: bool
+    expected_personal: bool | None
     predicted_personal: bool | None = None
-    outcome: Literal["TP", "FP", "TN", "FN", "FAILED"]
+    outcome: Literal["TP", "FP", "TN", "FN", "FAILED", "UNLABELED"]
     category: str | None = None
     subcategory: str | None = None
     level: str | None = None
@@ -116,9 +123,9 @@ class BenchmarkPredictionRow(BaseModel):
     benchmark_id: int
     field_name_snapshot: str
     sample_values: list[str] = Field(default_factory=list)
-    expected_personal: bool
+    expected_personal: bool | None
     predicted_personal: bool | None = None
-    outcome: Literal["TP", "FP", "TN", "FN", "FAILED"]
+    outcome: Literal["TP", "FP", "TN", "FN", "FAILED", "UNLABELED"]
     category: str | None = None
     subcategory: str | None = None
     level: str | None = None

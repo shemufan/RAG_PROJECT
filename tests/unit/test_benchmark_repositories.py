@@ -81,6 +81,13 @@ def test_target_repository_maps_run_and_prediction_to_relational_parameters():
         total_cases=100,
         model_name="fake",
         knowledge_base_version="v-test",
+        source_type="csv",
+        input_mode="tabular",
+        source_name="business.csv",
+        source_fingerprint="a" * 64,
+        label_fingerprint="b" * 64,
+        labeled_cases=80,
+        unlabeled_cases=20,
         started_at=now,
     )
     prediction = BenchmarkPrediction(
@@ -107,5 +114,35 @@ def test_target_repository_maps_run_and_prediction_to_relational_parameters():
     run_params = engine.connection.calls[0][1]
     prediction_params = engine.connection.calls[1][1]
     assert run_params["personal_limit"] == 20
+    assert run_params["source_type"] == "csv"
+    assert run_params["input_mode"] == "tabular"
+    assert run_params["labeled_cases"] == 80
     assert prediction_params["predicted_personal"] is True
     assert json.loads(prediction_params["sample_values_json"]) == ["a***@x.test"]
+
+
+def test_target_repository_persists_unlabeled_csv_prediction():
+    engine = RecordingEngine()
+    repository = BenchmarkTargetRepository(engine=engine)
+    prediction = BenchmarkPrediction(
+        run_id=UUID("12345678-1234-5678-1234-567812345678"),
+        benchmark_id=1,
+        field_name_snapshot="created_at",
+        expected_personal=None,
+        predicted_personal=False,
+        outcome="UNLABELED",
+        category="业务信息",
+        level="L1",
+        confidence=0.8,
+        reason="test",
+        need_review=False,
+        decision_path="rag_llm",
+        status="SUCCESS",
+        created_at=datetime(2026, 8, 6, tzinfo=timezone.utc),
+    )
+
+    repository.save_prediction(prediction)
+
+    parameters = engine.connection.calls[0][1]
+    assert parameters["expected_personal"] is None
+    assert parameters["outcome"] == "UNLABELED"
