@@ -135,37 +135,26 @@ cmd /c "mysql -u root -p compliance_result < sql\migrations\2026-08-04_add_is_pe
 ## 个人信息字段 Benchmark
 
 Benchmark 用两份已标注 CSV 检验系统能否在大量非个人信息字段中识别个人信息。CSV
-只负责一次性导入；正式评测始终从 A 库逐行读取测试案例，经现有 Chroma + LLM 链路
-分类，再将逐案例结果和评分写入 B 库。真实标签不会进入 `FieldProfile`、检索文本或
-Prompt。
+由通用目录型 CSV 适配器直接转换为 `FieldProfile`，经现有 Chroma + LLM 链路分类，再将
+逐案例结果和评分写入 B 库。个人信息文件统一标记为正例，非个人信息文件统一标记为负例；
+真实标签不会进入 `FieldProfile`、检索文本或 Prompt。
 
-### 1. 建表
+### 1. 准备 B 库
 
-先确保 `enterprise_source` 和 `compliance_result` 已按上文建立，再分别增加 Benchmark
-表：
+Benchmark 不再把 CSV 暂存到数据库 A，也不需要 `SOURCE_DATABASE_URL`。全新 B 库执行：
 
 ```powershell
-cmd /c "mysql -u root -p < sql\benchmark_source_schema.sql"
 cmd /c "mysql -u root -p < sql\benchmark_target_schema.sql"
 ```
 
-- A.`benchmark_field_input`：保存 CSV 原始字段名、最多 5 个脱敏样例和真实标签；同名字段
-  不合并。
-- B.`benchmark_prediction`：保存每个案例的预测、TP/FP/TN/FN/FAILED、分类详情和法规依据。
-- B.`benchmark_run`：保存任务状态、混淆矩阵和最终指标。
+已有 B 库按“直接 CSV 输入”章节执行迁移。`benchmark_prediction` 保存逐字段预测、
+TP/FP/TN/FN/FAILED、分类详情和法规依据；`benchmark_run` 保存任务状态和汇总指标。
 
-### 2. 导入两份 CSV
+### 2. 准备两份 CSV
 
-CSV 保留在仓库外部，不提交 Git。导入会自动尝试 UTF-8 BOM、UTF-8 和 GB18030；第一列
-必须为 `字段名`，后续 `样本N` 列作为脱敏样例。两份文件先全部校验，再在同一事务写入 A；
-重复执行同一批次只报告 `skipped`，不会删除或覆盖既有案例。
-
-```powershell
-python -m scripts.import_benchmark_data `
-  --personal "D:\benchmark\个人信息_脱敏.csv" `
-  --non-personal "D:\benchmark\非个人信息字段_脱敏.csv" `
-  --batch teacher_2026_08
-```
+CSV 保留在仓库外部，不提交 Git。程序自动尝试 UTF-8 BOM、UTF-8 和 GB18030；文件必须为
+字段目录型，包含 `字段名/field_name` 以及至少一个 `样本N/sample_N` 列。同名字段按原行
+保留，不会合并。
 
 ### 3. 运行评测
 
@@ -174,23 +163,36 @@ python -m scripts.import_benchmark_data `
 ```powershell
 # 小批量：20 个个人信息案例 + 80 个非个人信息案例
 python -m scripts.run_benchmark `
+  --personal "D:\benchmark\个人信息_脱敏.csv" `
+  --non-personal "D:\benchmark\非个人信息字段_脱敏.csv" `
   --batch teacher_2026_08 `
   --personal-limit 20 `
   --non-personal-limit 80
 
 # 全量新任务（会逐案例调用 LLM，可能耗时并产生费用）
-python -m scripts.run_benchmark --batch teacher_2026_08
+python -m scripts.run_benchmark `
+  --personal "D:\benchmark\个人信息_脱敏.csv" `
+  --non-personal "D:\benchmark\非个人信息字段_脱敏.csv" `
+  --batch teacher_2026_08
 
 # 继续中断任务；默认只处理尚未写入 B 的案例
-python -m scripts.run_benchmark --resume-run <run_id>
+python -m scripts.run_benchmark `
+  --personal "D:\benchmark\个人信息_脱敏.csv" `
+  --non-personal "D:\benchmark\非个人信息字段_脱敏.csv" `
+  --resume-run <run_id>
 
-# 继续任务并额外重试失败案例；成功案例不会重复调用
-python -m scripts.run_benchmark --resume-run <run_id> --retry-failed
+# 额外重试失败案例；成功案例不会重复调用
+python -m scripts.run_benchmark `
+  --personal "D:\benchmark\个人信息_脱敏.csv" `
+  --non-personal "D:\benchmark\非个人信息字段_脱敏.csv" `
+  --resume-run <run_id> `
+  --retry-failed
 ```
 
 Runner 每处理一个案例立即写入 B，单个分类失败会记录为 `FAILED` 并继续。终端输出
 run ID、案例数、混淆矩阵、Precision、Recall、F1、Accuracy、Coverage 和 Effective
-Recall，不输出脱敏样例。
+Recall，不输出脱敏样例。恢复时必须重新提供相同两份文件；文件内容、角色或初始 limit
+变化时，组合指纹校验会拒绝把新旧结果混入同一 run。
 
 ### 4. 指标与查询
 
@@ -211,7 +213,7 @@ GET /api/benchmark/results?run_id={run_id}&outcome=FAILED
 ```
 
 Benchmark 长任务只通过 CLI 启动；FastAPI 接口只读，避免让长时间付费调用占用 HTTP
-请求。建议演示顺序为：展示 A 输入数量与标签分布 → 运行分层小批量 → 展示终端评分 →
+请求。建议演示顺序为：展示两份 CSV 及标签分布 → 运行分层小批量 → 展示终端评分 →
 通过 API/Swagger 展示 FN、FP、失败原因、分类理由和法规依据。
 
 ## 直接 CSV 输入
@@ -290,8 +292,8 @@ python -m scripts.run_csv_pipeline `
 变化时拒绝把新旧结果混入同一 run。CSV 默认上限为 100 MB、1,000,000 行和 10,000 列，
 一次只处理一份文件。分类调用真实 LLM 并可能产生费用，应先使用少量字段验证配置。
 
-现有老师两份目录型 Benchmark、A 库导入脚本和 MySQL A → RAG → B Pipeline 均继续保留；
-待直接 CSV 链路稳定后，再单独收束重复的 Benchmark 导入代码。
+老师两份目录型 Benchmark 复用同一套 CSV Reader、Catalog Adapter 和 CSV Pipeline；普通
+MySQL A → RAG → B Pipeline 独立保留，用于扫描真实数据库结构。
 
 ## 重建法规知识库
 
