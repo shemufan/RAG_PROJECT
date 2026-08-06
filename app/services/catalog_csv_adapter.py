@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.schemas.csv_input import CSVFieldCase, CSVInputBatch
+from app.schemas.csv_input import CSVFieldCase, CSVInputBatch, CSVProfileDefaults
 from app.schemas.field import FieldProfile
 from app.services.csv_mode_detector import FIELD_NAME_ALIASES, sample_number
 from app.services.csv_reader import CSVInputError, CSVReader
@@ -28,7 +28,9 @@ class CatalogCSVAdapter:
         *,
         field_name_column: str | None = None,
         sample_columns: list[str] | None = None,
+        profile_defaults: CSVProfileDefaults | None = None,
     ) -> CSVInputBatch:
+        defaults = profile_defaults or CSVProfileDefaults()
         inspection = self.reader.inspect(path)
         name_column = field_name_column or next(
             (header for header in inspection.headers if header in FIELD_NAME_ALIASES),
@@ -64,11 +66,14 @@ class CatalogCSVAdapter:
                     field_profile=FieldProfile(
                         field_name=field_name,
                         sample_values=samples,
-                        source_system=values.get("source_system") or "csv",
-                        database_name=values.get("database_name") or "csv_source",
-                        table_name=values.get("table_name") or "catalog_input",
-                        data_type=values.get("data_type") or "unknown",
-                        business_domain=values.get("business_domain") or "general",
+                        source_system=values.get("source_system")
+                        or defaults.source_system,
+                        database_name=values.get("database_name")
+                        or defaults.database_name,
+                        table_name=values.get("table_name") or defaults.table_name,
+                        data_type=values.get("data_type") or defaults.data_type,
+                        business_domain=values.get("business_domain")
+                        or defaults.business_domain,
                         field_cn=values.get("field_cn"),
                         field_comment=values.get("field_comment"),
                     ),

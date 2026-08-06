@@ -57,3 +57,35 @@ def test_catalog_requires_a_field_name_column(tmp_path):
 
     with pytest.raises(CSVInputError, match="field-name column"):
         CatalogCSVAdapter().load(path)
+
+
+def test_catalog_accepts_profile_defaults_without_overriding_csv_metadata(tmp_path):
+    from app.schemas.csv_input import CSVProfileDefaults
+
+    path = tmp_path / "benchmark.csv"
+    write_csv(
+        path,
+        [
+            ["field_name", "source_system", "database_name", "sample1"],
+            ["email", "explicit-source", "", "masked@example.test"],
+        ],
+    )
+
+    batch = CatalogCSVAdapter().load(
+        path,
+        sample_columns=["sample1"],
+        profile_defaults=CSVProfileDefaults(
+            source_system="benchmark",
+            database_name="teacher_benchmark",
+            table_name="benchmark_input",
+            data_type="unknown",
+            business_domain="general",
+        ),
+    )
+
+    profile = batch.cases[0].field_profile
+    assert profile.source_system == "explicit-source"
+    assert profile.database_name == "teacher_benchmark"
+    assert profile.table_name == "benchmark_input"
+    assert profile.data_type == "unknown"
+    assert profile.business_domain == "general"

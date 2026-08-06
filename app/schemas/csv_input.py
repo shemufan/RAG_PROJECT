@@ -16,6 +16,14 @@ class CSVReadLimits(BaseModel):
     max_columns: int = Field(default=10_000, ge=1)
 
 
+class CSVProfileDefaults(BaseModel):
+    source_system: str = "csv"
+    database_name: str = "csv_source"
+    table_name: str = "catalog_input"
+    data_type: str = "unknown"
+    business_domain: str = "general"
+
+
 class CSVInspection(BaseModel):
     source_name: str
     source_fingerprint: str
