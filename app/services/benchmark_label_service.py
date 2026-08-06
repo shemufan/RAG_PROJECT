@@ -122,7 +122,15 @@ def prepare_labeled_catalog_benchmark(
     non_personal_cases = non_personal.cases[:non_personal_limit]
     combined = [*personal_cases, *non_personal_cases]
     cases = [
-        case.model_copy(update={"case_index": index, "expected_personal": None})
+        case.model_copy(
+            update={
+                "case_index": index,
+                "expected_personal": None,
+                "field_profile": case.field_profile.model_copy(
+                    update=BENCHMARK_PROFILE_DEFAULTS.model_dump()
+                ),
+            }
+        )
         for index, case in enumerate(combined, start=1)
     ]
     labeled_cases = [

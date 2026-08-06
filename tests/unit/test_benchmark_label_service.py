@@ -83,9 +83,9 @@ def test_two_file_benchmark_uses_generic_catalog_profiles_and_role_labels(tmp_pa
     write_csv(
         personal,
         [
-            ["field_name", "sample2", "sample1"],
-            ["email", "second", "first"],
-            ["email", "duplicate", "kept"],
+            ["field_name", "source_system", "sample2", "sample1"],
+            ["email", "csv-value", "second", "first"],
+            ["email", "csv-value", "duplicate", "kept"],
         ],
     )
     write_csv(
