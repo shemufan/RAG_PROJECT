@@ -125,6 +125,23 @@ class BenchmarkTargetRepository:
             rows = connection.execute(statement, {"run_id": str(run_id)}).mappings().all()
         return {int(row["benchmark_id"]): str(row["status"]) for row in rows}
 
+    def list_recorded_case_snapshots(self, run_id: UUID) -> dict[int, tuple[str, str]]:
+        statement = text(
+            """
+            SELECT benchmark_id, field_name_snapshot, status
+            FROM benchmark_prediction WHERE run_id=:run_id
+            """
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement, {"run_id": str(run_id)}).mappings().all()
+        return {
+            int(row["benchmark_id"]): (
+                str(row["field_name_snapshot"]),
+                str(row["status"]),
+            )
+            for row in rows
+        }
+
     def delete_failed_prediction(self, run_id: UUID, benchmark_id: int) -> None:
         statement = text(
             """
