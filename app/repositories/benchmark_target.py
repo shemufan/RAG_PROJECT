@@ -117,14 +117,6 @@ class BenchmarkTargetRepository:
             rows = connection.execute(statement, {"run_id": str(run_id)}).mappings().all()
         return [BenchmarkMetricInput.model_validate(dict(row)) for row in rows]
 
-    def list_recorded_cases(self, run_id: UUID) -> dict[int, str]:
-        statement = text(
-            "SELECT benchmark_id, status FROM benchmark_prediction WHERE run_id=:run_id"
-        )
-        with self.engine.connect() as connection:
-            rows = connection.execute(statement, {"run_id": str(run_id)}).mappings().all()
-        return {int(row["benchmark_id"]): str(row["status"]) for row in rows}
-
     def list_recorded_case_snapshots(self, run_id: UUID) -> dict[int, tuple[str, str]]:
         statement = text(
             """

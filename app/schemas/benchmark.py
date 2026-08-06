@@ -1,4 +1,4 @@
-"""Validated models for personal-information benchmark import and scoring."""
+"""Validated models for personal-information benchmark results and scoring."""
 
 from datetime import datetime, timezone
 from typing import Literal
@@ -7,36 +7,6 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.schemas.classification import Evidence
-from app.schemas.field import FieldProfile
-
-DatasetLabel = Literal["personal", "non_personal"]
-
-
-class BenchmarkImportRow(BaseModel):
-    """One validated source CSV row before database insertion."""
-
-    source_dataset: DatasetLabel
-    source_row_number: int = Field(ge=2)
-    field_name: str = Field(min_length=1, max_length=128)
-    sample_values: list[str] = Field(default_factory=list, max_length=5)
-    expected_personal: bool
-
-
-class BenchmarkImportSummary(BaseModel):
-    """Counts returned by one idempotent A-database import transaction."""
-
-    processed: int
-    inserted: int
-    skipped: int
-
-
-class BenchmarkCase(BaseModel):
-    """One stored benchmark case plus its hidden evaluation label."""
-
-    benchmark_id: int = Field(ge=1)
-    batch_name: str = Field(min_length=1, max_length=64)
-    expected_personal: bool
-    field_profile: FieldProfile
 
 
 class BenchmarkMetricInput(BaseModel):

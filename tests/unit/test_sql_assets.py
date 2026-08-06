@@ -69,12 +69,9 @@ def test_target_schema_has_required_tables_constraints_and_indexes():
         assert index_name in sql
 
 
-def test_benchmark_schema_files_define_source_and_target_tables():
-    source = normalized(read_sql("benchmark_source_schema.sql"))
+def test_benchmark_schema_defines_target_tables():
     target = normalized(read_sql("benchmark_target_schema.sql"))
 
-    assert "create table if not exists benchmark_field_input" in source
-    assert "unique key uq_benchmark_source_row" in source
     assert "create table if not exists benchmark_run" in target
     assert "create table if not exists benchmark_prediction" in target
     assert "unique key uq_benchmark_run_case" in target
