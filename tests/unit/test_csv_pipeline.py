@@ -191,3 +191,20 @@ def test_resume_rejects_changed_recorded_field_name():
 
     with pytest.raises(ValueError, match="case mapping"):
         pipeline.resume(RUN_ID, source)
+
+
+def test_resume_rejects_changed_label_file():
+    target = FakeTarget()
+    pipeline = make_pipeline(target, FakeClassifier({"email": True}))
+    source = batch(case(1, "email"))
+    original = LabelMatchSummary(
+        label_fingerprint="b" * 64,
+        labeled_cases=1,
+        unlabeled_cases=0,
+        cases=[case(1, "email", True)],
+    )
+    changed = original.model_copy(update={"label_fingerprint": "c" * 64})
+    pipeline.run(source, original)
+
+    with pytest.raises(ValueError, match="does not match"):
+        pipeline.resume(RUN_ID, source, changed)

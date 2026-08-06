@@ -214,6 +214,85 @@ Benchmark 长任务只通过 CLI 启动；FastAPI 接口只读，避免让长时
 请求。建议演示顺序为：展示 A 输入数量与标签分布 → 运行分层小批量 → 展示终端评分 →
 通过 API/Swagger 展示 FN、FP、失败原因、分类理由和法规依据。
 
+## 直接 CSV 输入
+
+CSV 不必先写入数据库 A。系统会把不同输入形状统一转换为 `FieldProfile`，再复用同一套
+Chroma + LLM 分类服务：
+
+```text
+CSV → 输入模式识别 → Catalog/Tabular Adapter → FieldProfile → RAG + LLM → B
+```
+
+支持两种格式：
+
+- `catalog`：每行是一个字段，包含 `字段名/field_name` 和可选的 `样本N/sample_N`；
+- `tabular`：普通业务数据，每列表头是字段名，该列前 5 个非空值是脱敏样例。
+
+默认 `auto` 仅在检测到明确的“字段名列 + 样例列”时选择 `catalog`，否则选择更常见的
+`tabular`。结构存在歧义时程序会停止，要求显式指定模式。
+
+已有数据库在首次使用直接 CSV 前执行一次：
+
+```powershell
+cmd /c "mysql -u root -p compliance_result < sql\migrations\2026-08-06_extend_benchmark_for_csv.sql"
+```
+
+全新数据库直接执行当前 `sql/benchmark_target_schema.sql`，不要再执行上述迁移。
+
+### 普通业务 CSV：无标签分类
+
+```powershell
+python -m scripts.run_csv_pipeline `
+  --input "D:\data\business.csv" `
+  --input-mode auto
+```
+
+无标签字段仍会完整分类并写入 B，`outcome=UNLABELED`。Coverage 可用；Precision、
+Recall、F1、Accuracy 和 Effective Recall 显示为 `N/A`，不会伪造成零分。
+
+### 普通业务 CSV：带标签评分
+
+标签文件独立保存，不修改业务 CSV：
+
+```csv
+field_name,expected_personal
+reg_ip,true
+product_price,false
+```
+
+```powershell
+python -m scripts.run_csv_pipeline `
+  --input "D:\data\business.csv" `
+  --input-mode tabular `
+  --labels "D:\data\business_labels.csv"
+```
+
+业务 CSV 中未出现在标签文件里的字段正常分类但不参与评分；标签文件中出现业务 CSV
+不存在的字段会直接报错。标签只用于结果比较，绝不进入 `FieldProfile` 或 Prompt。
+
+### 字段目录 CSV 与恢复
+
+```powershell
+python -m scripts.run_csv_pipeline `
+  --input "D:\data\field_catalog.csv" `
+  --input-mode catalog `
+  --field-name-column "字段名称" `
+  --sample-columns "示例1,示例2,示例3"
+
+python -m scripts.run_csv_pipeline `
+  --resume-run <run_id> `
+  --input "D:\data\business.csv" `
+  --labels "D:\data\business_labels.csv" `
+  --retry-failed
+```
+
+恢复时必须重新提供同一输入和标签文件。系统比较 SHA-256、输入模式及字段顺序；文件发生
+变化时拒绝把新旧结果混入同一 run。CSV 默认上限为 100 MB、1,000,000 行和 10,000 列，
+一次只处理一份文件。分类调用真实 LLM 并可能产生费用，应先使用少量字段验证配置。
+
+现有老师两份目录型 Benchmark、A 库导入脚本和 MySQL A → RAG → B Pipeline 均继续保留；
+待直接 CSV 链路稳定后，再单独收束重复的 Benchmark 导入代码。
+
 ## 重建法规知识库
 
 法规目录原生支持：

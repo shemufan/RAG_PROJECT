@@ -17,3 +17,7 @@ ALTER TABLE `benchmark_run`
 
 ALTER TABLE `benchmark_prediction`
   MODIFY COLUMN `expected_personal` BOOLEAN NULL;
+
+UPDATE `benchmark_run`
+SET `labeled_cases` = `total_cases`, `unlabeled_cases` = 0
+WHERE `source_type` = 'mysql_benchmark';
