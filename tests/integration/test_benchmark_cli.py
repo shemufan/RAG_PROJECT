@@ -1,4 +1,5 @@
 import csv
+from types import SimpleNamespace
 
 import pytest
 
@@ -56,3 +57,38 @@ def test_benchmark_cli_requires_both_files_and_valid_resume_options():
         parse_args([*common, "--batch", "teacher", "--retry-failed"])
     with pytest.raises(SystemExit):
         parse_args([*common, "--resume-run", run_id, "--personal-limit", "1"])
+
+
+def test_benchmark_resume_reuses_persisted_batch_name_and_limits(tmp_path):
+    personal = tmp_path / "personal.csv"
+    non_personal = tmp_path / "non_personal.csv"
+    write_csv(personal, [["field_name", "sample1"], ["email", "a"], ["phone", "b"]])
+    write_csv(
+        non_personal,
+        [["field_name", "sample1"], ["price", "1"], ["created_at", "2"]],
+    )
+    args = parse_args(
+        [
+            "--personal",
+            str(personal),
+            "--non-personal",
+            str(non_personal),
+            "--resume-run",
+            "12345678-1234-5678-1234-567812345678",
+        ]
+    )
+    stored = SimpleNamespace(
+        batch_name="teacher",
+        personal_limit=1,
+        non_personal_limit=1,
+    )
+
+    prepared = load_benchmark_input(args, resume_summary=stored)
+
+    assert prepared.batch.source_name == "teacher"
+    assert prepared.batch.personal_limit == 1
+    assert prepared.batch.non_personal_limit == 1
+    assert [case.field_profile.field_name for case in prepared.batch.cases] == [
+        "email",
+        "price",
+    ]

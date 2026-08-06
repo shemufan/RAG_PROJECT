@@ -58,13 +58,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def load_benchmark_input(args: argparse.Namespace) -> BenchmarkCSVInput:
+def load_benchmark_input(
+    args: argparse.Namespace,
+    *,
+    resume_summary: BenchmarkRunSummary | None = None,
+) -> BenchmarkCSVInput:
+    if args.resume_run is not None and resume_summary is None:
+        raise ValueError("resume summary is required to rebuild the original input")
+    batch_name = resume_summary.batch_name if resume_summary else args.batch
+    personal_limit = (
+        resume_summary.personal_limit if resume_summary else args.personal_limit
+    )
+    non_personal_limit = (
+        resume_summary.non_personal_limit if resume_summary else args.non_personal_limit
+    )
     return prepare_labeled_catalog_benchmark(
         args.personal,
         args.non_personal,
-        batch_name=args.batch or "benchmark-resume",
-        personal_limit=args.personal_limit,
-        non_personal_limit=args.non_personal_limit,
+        batch_name=batch_name,
+        personal_limit=personal_limit,
+        non_personal_limit=non_personal_limit,
     )
 
 
@@ -111,8 +124,13 @@ def print_summary(summary: BenchmarkRunSummary) -> None:
 
 def main() -> None:
     args = parse_args()
-    prepared = load_benchmark_input(args)
     pipeline = build_pipeline(load_settings())
+    resume_summary = None
+    if args.resume_run is not None:
+        resume_summary = pipeline.target_repository.get_run(args.resume_run)
+        if resume_summary is None:
+            raise SystemExit("benchmark run not found")
+    prepared = load_benchmark_input(args, resume_summary=resume_summary)
     if args.resume_run is not None:
         summary = pipeline.resume(
             args.resume_run,
