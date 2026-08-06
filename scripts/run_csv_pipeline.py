@@ -1,0 +1,138 @@
+"""Classify one catalog or ordinary business CSV directly without database A."""
+
+import argparse
+from collections.abc import Sequence
+from uuid import UUID
+
+from app.core.config import load_settings
+from app.repositories.benchmark_target import BenchmarkTargetRepository
+from app.repositories.vector_store import VectorStore
+from app.schemas.csv_input import CSVInputBatch, LabelMatchSummary
+from app.services.benchmark_label_service import attach_benchmark_labels
+from app.services.catalog_csv_adapter import CatalogCSVAdapter
+from app.services.classification_service import FieldClassificationService
+from app.services.csv_mode_detector import resolve_csv_mode
+from app.services.csv_pipeline import CSVClassificationPipeline
+from app.services.csv_reader import CSVReader
+from app.services.embedding_service import EmbeddingService
+from app.services.llm_service import LLMService
+from app.services.tabular_csv_adapter import TabularCSVAdapter
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", required=True, help="one CSV input path")
+    parser.add_argument(
+        "--input-mode",
+        choices=("auto", "catalog", "tabular"),
+        default="auto",
+    )
+    parser.add_argument("--labels", help="optional field_name label CSV")
+    parser.add_argument("--field-name-column")
+    parser.add_argument("--sample-columns", help="comma-separated catalog columns")
+    parser.add_argument("--resume-run", type=UUID)
+    parser.add_argument("--retry-failed", action="store_true")
+    return parser
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.retry_failed and args.resume_run is None:
+        parser.error("--retry-failed requires --resume-run")
+    if (args.field_name_column or args.sample_columns) and args.input_mode != "catalog":
+        parser.error("catalog column mappings require --input-mode catalog")
+    return args
+
+
+def load_csv_batch(args: argparse.Namespace) -> CSVInputBatch:
+    inspection = CSVReader().inspect(args.input)
+    mode = resolve_csv_mode(inspection.headers, args.input_mode)
+    if mode == "tabular":
+        return TabularCSVAdapter().load(args.input)
+    sample_columns = None
+    if args.sample_columns is not None:
+        sample_columns = [
+            column.strip() for column in args.sample_columns.split(",") if column.strip()
+        ]
+    return CatalogCSVAdapter().load(
+        args.input,
+        field_name_column=args.field_name_column,
+        sample_columns=sample_columns,
+    )
+
+
+def load_labels(
+    batch: CSVInputBatch,
+    label_path: str | None,
+) -> LabelMatchSummary | None:
+    return attach_benchmark_labels(batch, label_path) if label_path else None
+
+
+def build_pipeline(settings) -> CSVClassificationPipeline:
+    if not settings.target_database_url:
+        raise SystemExit("TARGET_DATABASE_URL is not configured")
+    embedding_service = EmbeddingService(model_path=settings.embedding_model_path)
+    vector_store = VectorStore(embedding_service, settings=settings)
+    if vector_store.count() == 0:
+        raise SystemExit(
+            "knowledge base is empty; run python -m scripts.rebuild_knowledge_base"
+        )
+    classifier = FieldClassificationService(
+        vector_store,
+        LLMService(settings=settings),
+    )
+    return CSVClassificationPipeline(
+        BenchmarkTargetRepository(settings.target_database_url),
+        classifier,
+        model_name=settings.deepseek_model,
+        knowledge_base_version=settings.knowledge_base_version,
+    )
+
+
+def _score(value: float | None) -> str:
+    return "N/A" if value is None else f"{value:.4f}"
+
+
+def print_summary(summary) -> None:
+    print(f"run_id={summary.run_id}")
+    print(
+        f"source={summary.source_name}, mode={summary.input_mode}, "
+        f"status={summary.status}"
+    )
+    print(
+        f"cases: total={summary.total_cases}, success={summary.success_cases}, "
+        f"failed={summary.failed_cases}, labeled={summary.labeled_cases}, "
+        f"unlabeled={summary.unlabeled_cases}"
+    )
+    print(f"confusion: TP={summary.tp}, FP={summary.fp}, TN={summary.tn}, FN={summary.fn}")
+    print(
+        "scores: "
+        f"precision={_score(summary.precision_score)}, "
+        f"recall={_score(summary.recall_score)}, "
+        f"f1={_score(summary.f1_score)}, "
+        f"accuracy={_score(summary.accuracy_score)}, "
+        f"coverage={summary.coverage_score:.4f}, "
+        f"effective_recall={_score(summary.effective_recall_score)}"
+    )
+
+
+def main() -> None:
+    args = parse_args()
+    batch = load_csv_batch(args)
+    labels = load_labels(batch, args.labels)
+    pipeline = build_pipeline(load_settings())
+    if args.resume_run is None:
+        summary = pipeline.run(batch, labels)
+    else:
+        summary = pipeline.resume(
+            args.resume_run,
+            batch,
+            labels,
+            retry_failed=args.retry_failed,
+        )
+    print_summary(summary)
+
+
+if __name__ == "__main__":
+    main()

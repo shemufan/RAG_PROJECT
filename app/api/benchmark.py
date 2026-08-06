@@ -10,7 +10,7 @@ from app.repositories.benchmark_target import BenchmarkTargetRepository
 from app.schemas.benchmark import BenchmarkPredictionRow, BenchmarkRunSummary
 
 router = APIRouter(prefix="/benchmark", tags=["benchmark"])
-Outcome = Literal["TP", "FP", "TN", "FN", "FAILED"]
+Outcome = Literal["TP", "FP", "TN", "FN", "FAILED", "UNLABELED"]
 
 
 def get_benchmark_repository(request: Request) -> BenchmarkTargetRepository:

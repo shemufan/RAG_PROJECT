@@ -120,6 +120,18 @@ def test_benchmark_results_validate_and_forward_filters():
     assert repository.filters["need_review"] is True
 
 
+def test_benchmark_results_accept_unlabeled_outcome():
+    client, repository = make_client()
+    with client:
+        response = client.get(
+            "/api/benchmark/results",
+            params={"run_id": str(RUN_ID), "outcome": "UNLABELED"},
+        )
+
+    assert response.status_code == 200
+    assert repository.filters["outcome"] == "UNLABELED"
+
+
 def test_benchmark_repository_dependency_reports_missing_target_url(monkeypatch):
     from app.api import benchmark
 
