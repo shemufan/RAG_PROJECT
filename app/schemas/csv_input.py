@@ -42,6 +42,8 @@ class CSVInputBatch(BaseModel):
     source_name: str
     source_fingerprint: str
     input_mode: ResolvedInputMode
+    personal_limit: int | None = Field(default=None, ge=1)
+    non_personal_limit: int | None = Field(default=None, ge=1)
     cases: list[CSVFieldCase] = Field(default_factory=list)
 
 

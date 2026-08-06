@@ -135,6 +135,25 @@ def test_csv_pipeline_scores_labels_and_marks_unlabeled_results():
     assert classifier.seen == ["email", "price"]
 
 
+def test_csv_pipeline_records_optional_benchmark_limits():
+    target = FakeTarget()
+    classifier = FakeClassifier({"email": True, "price": False})
+    source = CSVInputBatch(
+        source_name="teacher_2026_08",
+        source_fingerprint="a" * 64,
+        input_mode="catalog",
+        personal_limit=1,
+        non_personal_limit=1,
+        cases=[case(1, "email"), case(2, "price")],
+    )
+
+    summary = make_pipeline(target, classifier).run(source)
+
+    assert summary.batch_name == "teacher_2026_08"
+    assert summary.personal_limit == 1
+    assert summary.non_personal_limit == 1
+
+
 def test_csv_pipeline_records_unknown_and_continues():
     target = FakeTarget()
     classifier = FakeClassifier({"email": RuntimeError("down"), "price": False})

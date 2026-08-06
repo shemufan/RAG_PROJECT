@@ -1,16 +1,19 @@
-"""Run or resume the personal-information benchmark from database A to B."""
+"""Run or resume a labeled two-file CSV benchmark directly to database B."""
 
 import argparse
 from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.config import load_settings
-from app.repositories.benchmark_source import BenchmarkSourceRepository
 from app.repositories.benchmark_target import BenchmarkTargetRepository
 from app.repositories.vector_store import VectorStore
 from app.schemas.benchmark import BenchmarkRunSummary
-from app.services.benchmark_pipeline import BenchmarkClassificationPipeline
+from app.services.benchmark_label_service import (
+    BenchmarkCSVInput,
+    prepare_labeled_catalog_benchmark,
+)
 from app.services.classification_service import FieldClassificationService
+from app.services.csv_pipeline import CSVClassificationPipeline
 from app.services.embedding_service import EmbeddingService
 from app.services.llm_service import LLMService
 
@@ -24,6 +27,12 @@ def _positive_integer(value: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--personal", required=True, help="personal-field catalog CSV")
+    parser.add_argument(
+        "--non-personal",
+        required=True,
+        help="non-personal-field catalog CSV",
+    )
     run_mode = parser.add_mutually_exclusive_group(required=True)
     run_mode.add_argument("--batch", help="start a new run for this imported batch")
     run_mode.add_argument("--resume-run", type=UUID, help="resume an existing run ID")
@@ -49,9 +58,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def build_pipeline(settings) -> BenchmarkClassificationPipeline:
-    if not settings.source_database_url:
-        raise SystemExit("SOURCE_DATABASE_URL is not configured")
+def load_benchmark_input(args: argparse.Namespace) -> BenchmarkCSVInput:
+    return prepare_labeled_catalog_benchmark(
+        args.personal,
+        args.non_personal,
+        batch_name=args.batch or "benchmark-resume",
+        personal_limit=args.personal_limit,
+        non_personal_limit=args.non_personal_limit,
+    )
+
+
+def build_pipeline(settings) -> CSVClassificationPipeline:
     if not settings.target_database_url:
         raise SystemExit("TARGET_DATABASE_URL is not configured")
     embedding_service = EmbeddingService(model_path=settings.embedding_model_path)
@@ -64,8 +81,7 @@ def build_pipeline(settings) -> BenchmarkClassificationPipeline:
         vector_store,
         LLMService(settings=settings),
     )
-    return BenchmarkClassificationPipeline(
-        BenchmarkSourceRepository(settings.source_database_url),
+    return CSVClassificationPipeline(
         BenchmarkTargetRepository(settings.target_database_url),
         classifier,
         model_name=settings.deepseek_model,
@@ -95,15 +111,17 @@ def print_summary(summary: BenchmarkRunSummary) -> None:
 
 def main() -> None:
     args = parse_args()
+    prepared = load_benchmark_input(args)
     pipeline = build_pipeline(load_settings())
     if args.resume_run is not None:
-        summary = pipeline.resume(args.resume_run, retry_failed=args.retry_failed)
-    else:
-        summary = pipeline.run(
-            args.batch,
-            personal_limit=args.personal_limit,
-            non_personal_limit=args.non_personal_limit,
+        summary = pipeline.resume(
+            args.resume_run,
+            prepared.batch,
+            prepared.labels,
+            retry_failed=args.retry_failed,
         )
+    else:
+        summary = pipeline.run(prepared.batch, prepared.labels)
     print_summary(summary)
 
 

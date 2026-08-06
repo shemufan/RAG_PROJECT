@@ -1,37 +1,12 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from app.schemas.benchmark import BenchmarkCase
 from app.schemas.classification import ClassificationResult
-from app.schemas.field import FieldProfile
-from app.services.benchmark_import_service import parse_benchmark_csv
-from app.services.benchmark_pipeline import BenchmarkClassificationPipeline
+from app.services.benchmark_label_service import prepare_labeled_catalog_benchmark
+from app.services.csv_pipeline import CSVClassificationPipeline
 
 RUN_ID = UUID("12345678-1234-5678-1234-567812345678")
 NOW = datetime(2026, 8, 4, tzinfo=timezone.utc)
-
-
-class MemorySource:
-    def __init__(self, rows):
-        self.cases = [
-            BenchmarkCase(
-                benchmark_id=index,
-                batch_name="smoke",
-                expected_personal=row.expected_personal,
-                field_profile=FieldProfile(
-                    source_system="benchmark",
-                    database_name="teacher_benchmark",
-                    table_name="benchmark_input",
-                    field_name=row.field_name,
-                    sample_values=row.sample_values,
-                ),
-            )
-            for index, row in enumerate(rows, start=1)
-        ]
-
-    def list_cases(self, batch_name, personal_limit=None, non_personal_limit=None):
-        assert batch_name == "smoke"
-        return self.cases
 
 
 class MemoryTarget:
@@ -79,13 +54,13 @@ def test_generated_csv_to_classification_to_metrics_without_external_calls(tmp_p
         "字段名,样本1\nother_fp,masked-c\nother_tn,masked-d\n",
         encoding="utf-8-sig",
     )
-    rows = [
-        *parse_benchmark_csv(personal_path, source_dataset="personal"),
-        *parse_benchmark_csv(non_personal_path, source_dataset="non_personal"),
-    ]
+    prepared = prepare_labeled_catalog_benchmark(
+        personal_path,
+        non_personal_path,
+        batch_name="smoke",
+    )
     target = MemoryTarget()
-    pipeline = BenchmarkClassificationPipeline(
-        MemorySource(rows),
+    pipeline = CSVClassificationPipeline(
         target,
         FakeClassifier(),
         model_name="fake",
@@ -94,10 +69,11 @@ def test_generated_csv_to_classification_to_metrics_without_external_calls(tmp_p
         run_id_factory=lambda: RUN_ID,
     )
 
-    summary = pipeline.run("smoke")
+    summary = pipeline.run(prepared.batch, prepared.labels)
 
     assert (summary.tp, summary.fp, summary.tn, summary.fn) == (1, 1, 1, 1)
     assert summary.precision_score == 0.5
     assert summary.recall_score == 0.5
     assert summary.f1_score == 0.5
     assert summary.coverage_score == 1.0
+    assert summary.source_type == "csv"

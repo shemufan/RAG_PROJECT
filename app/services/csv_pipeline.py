@@ -51,6 +51,8 @@ class CSVClassificationPipeline:
         summary = BenchmarkRunSummary(
             run_id=self.run_id_factory(),
             batch_name=batch.source_name[:64],
+            personal_limit=batch.personal_limit,
+            non_personal_limit=batch.non_personal_limit,
             source_type="csv",
             input_mode=batch.input_mode,
             source_name=batch.source_name,

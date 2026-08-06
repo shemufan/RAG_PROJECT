@@ -148,6 +148,8 @@ def prepare_labeled_catalog_benchmark(
             source_name=batch_name,
             source_fingerprint=source_fingerprint,
             input_mode="catalog",
+            personal_limit=personal_limit,
+            non_personal_limit=non_personal_limit,
             cases=cases,
         ),
         labels=LabelMatchSummary(
