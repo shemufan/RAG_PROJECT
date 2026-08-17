@@ -272,6 +272,22 @@ python -m scripts.run_csv_pipeline `
 业务 CSV 中未出现在标签文件里的字段正常分类但不参与评分；标签文件中出现业务 CSV
 不存在的字段会直接报错。标签只用于结果比较，绝不进入 `FieldProfile` 或 Prompt。
 
+### 单文件内嵌标签（推荐）
+
+清洗后的 ground truth 若已把标签作为一列内嵌在目录型 CSV 里，可直接用 `--label-column`
+指定该列，无需再拆分独立标签文件：
+
+```powershell
+python -m scripts.run_csv_pipeline `
+  --input "D:\benchmark\groundtruth_cleaning_output\benchmark_confirmed_only.csv" `
+  --label-column "expected_personal"
+```
+
+标签列的值必须是 `true/false`（或 `1/0`），按行与字段一一对应；程序会从该列抽取
+ground truth 评分，并把该列排除在字段画像之外。`--label-column` 与 `--labels` 互斥，
+且仅适用于目录型（每行一个字段）输入；字段名/样例列名不叫 `字段名`/`样本N` 时，可
+配合 `--field-name-column` 与 `--sample-columns` 使用。
+
 ### 字段目录 CSV 与恢复
 
 ```powershell

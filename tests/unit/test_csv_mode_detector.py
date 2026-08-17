@@ -23,3 +23,14 @@ def test_auto_rejects_ambiguous_unknown_catalog_metadata():
 def test_explicit_mode_overrides_detection():
     assert resolve_csv_mode(["字段名", "样本1"], "tabular") == "tabular"
     assert resolve_csv_mode(["only_name"], "catalog") == "catalog"
+
+
+def test_auto_ignores_explicit_label_column_when_detecting_mode():
+    assert (
+        resolve_csv_mode(
+            ["字段名", "样本1", "expected_personal"],
+            "auto",
+            ignored_headers={"expected_personal"},
+        )
+        == "catalog"
+    )

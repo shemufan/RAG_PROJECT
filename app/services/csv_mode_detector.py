@@ -36,9 +36,15 @@ def sample_number(header: str) -> int | None:
     return int(match.group(1) or match.group(2))
 
 
-def resolve_csv_mode(headers: list[str], requested_mode: InputMode) -> ResolvedInputMode:
+def resolve_csv_mode(
+    headers: list[str],
+    requested_mode: InputMode,
+    *,
+    ignored_headers: set[str] | None = None,
+) -> ResolvedInputMode:
     if requested_mode != "auto":
         return requested_mode
+    ignored = ignored_headers or set()
     has_field_name = any(header in FIELD_NAME_ALIASES for header in headers)
     has_samples = any(sample_number(header) is not None for header in headers)
     if not (has_field_name and has_samples):
@@ -47,7 +53,9 @@ def resolve_csv_mode(headers: list[str], requested_mode: InputMode) -> ResolvedI
     unknown = [
         header
         for header in headers
-        if header not in recognized and sample_number(header) is None
+        if header not in recognized
+        and sample_number(header) is None
+        and header not in ignored
     ]
     if unknown:
         raise CSVModeError("ambiguous CSV input mode; specify catalog or tabular")

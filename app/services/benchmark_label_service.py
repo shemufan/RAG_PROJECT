@@ -81,6 +81,42 @@ def attach_benchmark_labels(
     )
 
 
+def attach_embedded_labels(
+    batch: CSVInputBatch,
+    path: str | Path,
+    *,
+    label_column: str,
+    reader: CSVReader | None = None,
+) -> LabelMatchSummary:
+    """Read ground-truth labels from a column embedded in the input CSV."""
+    csv_reader = reader or CSVReader()
+    inspection = csv_reader.inspect(path)
+    if label_column not in inspection.headers:
+        raise CSVInputError(f"label column {label_column!r} is not in the input CSV")
+    raw_labels = [
+        _parse_boolean(row[label_column].strip(), row_number)
+        for row_number, row in csv_reader.iter_rows(path, inspection)
+    ]
+    if len(raw_labels) != len(batch.cases):
+        raise CSVInputError("label rows do not match the field case count")
+    cases = [
+        case.model_copy(update={"expected_personal": raw_labels[index]})
+        for index, case in enumerate(batch.cases)
+    ]
+    return LabelMatchSummary(
+        label_fingerprint=_fingerprint(
+            {
+                "purpose": "embedded-label",
+                "source": inspection.source_fingerprint,
+                "label_column": label_column,
+            }
+        ),
+        labeled_cases=len(cases),
+        unlabeled_cases=0,
+        cases=cases,
+    )
+
+
 def _fingerprint(payload: dict[str, object]) -> str:
     serialized = json.dumps(
         payload,

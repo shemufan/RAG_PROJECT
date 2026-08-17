@@ -4,8 +4,10 @@ import pytest
 
 from app.services.benchmark_label_service import (
     attach_benchmark_labels,
+    attach_embedded_labels,
     prepare_labeled_catalog_benchmark,
 )
+from app.services.catalog_csv_adapter import CatalogCSVAdapter
 from app.services.csv_reader import CSVInputError
 from app.services.tabular_csv_adapter import TabularCSVAdapter
 
@@ -165,3 +167,45 @@ def test_two_file_benchmark_applies_independent_limits_and_fingerprints_inputs(t
     assert limited.batch.source_fingerprint != full.batch.source_fingerprint
     assert limited.batch.source_fingerprint != swapped.batch.source_fingerprint
     assert limited.labels.label_fingerprint != swapped.labels.label_fingerprint
+
+
+def test_embedded_labels_attach_from_input_column(tmp_path):
+    source = tmp_path / "catalog.csv"
+    write_csv(
+        source,
+        [
+            ["字段名", "样本1", "expected_personal"],
+            ["email", "a***@x.test", "true"],
+            ["price", "99", "false"],
+        ],
+    )
+    batch = CatalogCSVAdapter().load(source)
+
+    summary = attach_embedded_labels(batch, source, label_column="expected_personal")
+
+    assert summary.labeled_cases == 2
+    assert summary.unlabeled_cases == 0
+    assert [case.expected_personal for case in summary.cases] == [True, False]
+    assert "expected_personal" not in summary.cases[0].field_profile.model_dump()
+    assert len(summary.label_fingerprint) == 64
+
+
+def test_embedded_labels_reject_missing_column(tmp_path):
+    source = tmp_path / "catalog.csv"
+    write_csv(source, [["字段名", "样本1"], ["email", "a***@x.test"]])
+    batch = CatalogCSVAdapter().load(source)
+
+    with pytest.raises(CSVInputError, match="not in the input CSV"):
+        attach_embedded_labels(batch, source, label_column="expected_personal")
+
+
+def test_embedded_labels_reject_invalid_boolean(tmp_path):
+    source = tmp_path / "catalog.csv"
+    write_csv(
+        source,
+        [["字段名", "样本1", "expected_personal"], ["email", "a***@x.test", "yes"]],
+    )
+    batch = CatalogCSVAdapter().load(source)
+
+    with pytest.raises(CSVInputError, match="boolean"):
+        attach_embedded_labels(batch, source, label_column="expected_personal")

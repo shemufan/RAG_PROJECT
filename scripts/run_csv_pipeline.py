@@ -8,15 +8,25 @@ from app.core.config import load_settings
 from app.repositories.benchmark_target import BenchmarkTargetRepository
 from app.repositories.vector_store import VectorStore
 from app.schemas.csv_input import CSVInputBatch, LabelMatchSummary
-from app.services.benchmark_label_service import attach_benchmark_labels
+from app.services.benchmark_label_service import (
+    attach_benchmark_labels,
+    attach_embedded_labels,
+)
 from app.services.catalog_csv_adapter import CatalogCSVAdapter
 from app.services.classification_service import FieldClassificationService
 from app.services.csv_mode_detector import resolve_csv_mode
 from app.services.csv_pipeline import CSVClassificationPipeline
-from app.services.csv_reader import CSVReader
+from app.services.csv_reader import CSVInputError, CSVReader
 from app.services.embedding_service import EmbeddingService
 from app.services.llm_service import LLMService
 from app.services.tabular_csv_adapter import TabularCSVAdapter
+
+
+def _positive_integer(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("limit must be at least 1")
+    return number
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,6 +38,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
     )
     parser.add_argument("--labels", help="optional field_name label CSV")
+    parser.add_argument(
+        "--label-column",
+        help="ground-truth label column embedded in the input CSV",
+    )
+    parser.add_argument(
+        "--limit",
+        type=_positive_integer,
+        help="classify only the first N cases (new runs only)",
+    )
     parser.add_argument("--field-name-column")
     parser.add_argument("--sample-columns", help="comma-separated catalog columns")
     parser.add_argument("--resume-run", type=UUID)
@@ -42,13 +61,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--retry-failed requires --resume-run")
     if (args.field_name_column or args.sample_columns) and args.input_mode != "catalog":
         parser.error("catalog column mappings require --input-mode catalog")
+    if args.label_column and args.labels:
+        parser.error("--label-column and --labels are mutually exclusive")
+    if args.label_column and args.input_mode == "tabular":
+        parser.error("--label-column requires catalog input (one field per row)")
+    if args.limit is not None and args.resume_run is not None:
+        parser.error("--limit applies to a new run and cannot be used with --resume-run")
     return args
 
 
 def load_csv_batch(args: argparse.Namespace) -> CSVInputBatch:
     inspection = CSVReader().inspect(args.input)
-    mode = resolve_csv_mode(inspection.headers, args.input_mode)
+    ignored = {args.label_column} if args.label_column else None
+    mode = resolve_csv_mode(inspection.headers, args.input_mode, ignored_headers=ignored)
     if mode == "tabular":
+        if args.label_column:
+            raise CSVInputError(
+                "--label-column requires catalog input (one field per row)"
+            )
         return TabularCSVAdapter().load(args.input)
     sample_columns = None
     if args.sample_columns is not None:
@@ -64,9 +94,34 @@ def load_csv_batch(args: argparse.Namespace) -> CSVInputBatch:
 
 def load_labels(
     batch: CSVInputBatch,
-    label_path: str | None,
+    args: argparse.Namespace,
 ) -> LabelMatchSummary | None:
-    return attach_benchmark_labels(batch, label_path) if label_path else None
+    if args.label_column:
+        return attach_embedded_labels(batch, args.input, label_column=args.label_column)
+    if args.labels:
+        return attach_benchmark_labels(batch, args.labels)
+    return None
+
+
+def apply_limit(
+    batch: CSVInputBatch,
+    labels: LabelMatchSummary | None,
+    limit: int | None,
+) -> tuple[CSVInputBatch, LabelMatchSummary | None]:
+    if limit is None:
+        return batch, labels
+    limited_batch = batch.model_copy(update={"cases": batch.cases[:limit]})
+    if labels is None:
+        return limited_batch, None
+    cases = labels.cases[:limit]
+    limited_labels = labels.model_copy(
+        update={
+            "cases": cases,
+            "labeled_cases": sum(case.expected_personal is not None for case in cases),
+            "unlabeled_cases": sum(case.expected_personal is None for case in cases),
+        }
+    )
+    return limited_batch, limited_labels
 
 
 def build_pipeline(settings) -> CSVClassificationPipeline:
@@ -120,7 +175,8 @@ def print_summary(summary) -> None:
 def main() -> None:
     args = parse_args()
     batch = load_csv_batch(args)
-    labels = load_labels(batch, args.labels)
+    labels = load_labels(batch, args)
+    batch, labels = apply_limit(batch, labels, args.limit)
     pipeline = build_pipeline(load_settings())
     if args.resume_run is None:
         summary = pipeline.run(batch, labels)
