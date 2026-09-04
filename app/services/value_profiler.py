@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-_MASK_PATTERN: re.Pattern[str] = re.compile(r"(?:\*+|[xX]{2,})")
+_MASK_PATTERN: re.Pattern[str] = re.compile(r"\*+|(?<=\d)[xX]+(?=\d)")
 _CHINESE_PATTERN: re.Pattern[str] = re.compile(r"[\u4e00-\u9fff]")
 _MOBILE_PATTERN: re.Pattern[str] = re.compile(
     r"^1[3-9]\d(?:\d{8}|(?:\*{2,4}|[xX]{2,4})\d{4})$"
@@ -20,8 +20,12 @@ _EMAIL_PATTERN: re.Pattern[str] = re.compile(
 _MAC_PATTERN: re.Pattern[str] = re.compile(
     r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$"
 )
-_ID_CARD_PATTERN: re.Pattern[str] = re.compile(r"^\d{17}[\dXx]$")
-_BANK_CARD_PATTERN: re.Pattern[str] = re.compile(r"^\d{16,19}$")
+_ID_CARD_PATTERN: re.Pattern[str] = re.compile(
+    r"^(?:\d{17}[\dXx]|\d{6}(?:\*{8}|[xX]{8})\d{3}[\dXx])$"
+)
+_BANK_CARD_PATTERN: re.Pattern[str] = re.compile(
+    r"^(?:\d{16,19}|\d{4}(?:\*{4,11}|[xX]{4,11})\d{4})$"
+)
 _IMEI_PATTERN: re.Pattern[str] = re.compile(r"^\d{15}$")
 _COORDINATE_PATTERN: re.Pattern[str] = re.compile(
     r"^\s*(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)\s*$"
@@ -109,7 +113,7 @@ class ValueProfiler:
             (
                 self._is_bank_card,
                 ["银行卡号", "金融账户信息"],
-                ["16至19位数字", "校验位有效"],
+                ["符合银行卡号结构"],
             ),
         )
         for detector, detected_candidates, detected_features in detectors:
@@ -254,7 +258,9 @@ class ValueProfiler:
 
     @staticmethod
     def _is_bank_card(value: str) -> bool:
-        return bool(_BANK_CARD_PATTERN.fullmatch(value)) and _passes_luhn(value)
+        if not _BANK_CARD_PATTERN.fullmatch(value):
+            return False
+        return bool(_MASK_PATTERN.search(value)) or _passes_luhn(value)
 
     @staticmethod
     def _is_datetime(value: str) -> bool:

@@ -1,6 +1,11 @@
 """Build concise retrieval queries from field value profiles."""
 
-from app.services.value_profiler import ValueProfile
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.value_profiler import ValueProfile
 
 
 class RetrievalQueryBuilder:

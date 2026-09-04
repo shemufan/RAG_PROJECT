@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 from app.rag.retrieval_query import RetrievalQueryBuilder
 from app.services.value_profiler import ValueProfile
 
@@ -71,3 +74,18 @@ def test_builder_cannot_receive_or_emit_field_profile_noise():
         "source_system",
     ):
         assert forbidden not in query
+
+
+def test_retrieval_query_module_can_be_imported_first_in_fresh_process():
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from app.rag.retrieval_query import RetrievalQueryBuilder",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr

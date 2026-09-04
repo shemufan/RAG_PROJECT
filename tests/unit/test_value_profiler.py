@@ -36,6 +36,13 @@ def test_profile_detects_masked_email(profiler: ValueProfiler):
     assert "存在脱敏字符" in result.features
 
 
+def test_profile_detects_x_masked_mobile_numbers(profiler: ValueProfiler):
+    result = profiler.profile("column_x", ["138XX1234"])
+
+    assert result.candidate_types[:2] == ["手机号码", "联系方式"]
+    assert "存在脱敏字符" in result.features
+
+
 def test_profile_does_not_force_candidate_for_product_names(
     profiler: ValueProfiler,
 ):
@@ -112,3 +119,29 @@ def test_profile_limits_and_deduplicates_candidates(profiler: ValueProfiler):
 
     assert len(result.candidate_types) <= 3
     assert len(result.candidate_types) == len(set(result.candidate_types))
+
+
+@pytest.mark.parametrize(
+    ("sample", "expected_candidate"),
+    [
+        ("110105********002X", "身份证号"),
+        ("6222********1234", "银行卡号"),
+    ],
+)
+def test_profile_detects_masked_numeric_identifiers(
+    profiler: ValueProfiler,
+    sample: str,
+    expected_candidate: str,
+):
+    result = profiler.profile("column_x", [sample])
+
+    assert expected_candidate in result.candidate_types
+    assert "存在脱敏字符" in result.features
+
+
+def test_profile_does_not_treat_ordinary_x_letters_as_masking(
+    profiler: ValueProfiler,
+):
+    result = profiler.profile("column_x", ["boxx_status"])
+
+    assert "存在脱敏字符" not in result.features
