@@ -1,7 +1,9 @@
 import csv
+from types import SimpleNamespace
 
 import pytest
 
+import scripts.run_csv_pipeline as csv_cli
 from scripts.run_csv_pipeline import apply_limit, load_csv_batch, load_labels, parse_args
 
 
@@ -138,3 +140,59 @@ def test_cli_rejects_limit_with_resume(tmp_path):
         parse_args(
             ["--input", str(path), "--limit", "5", "--resume-run", run_id]
         )
+
+
+@pytest.mark.parametrize("strategy", ["legacy", "clean", "profile"])
+def test_cli_accepts_query_strategy(tmp_path, strategy: str):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    args = parse_args(["--input", str(path), "--query-strategy", strategy])
+
+    assert args.query_strategy == strategy
+
+
+def test_cli_defaults_query_strategy_to_profile(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    assert parse_args(["--input", str(path)]).query_strategy == "profile"
+
+
+def test_cli_rejects_unknown_query_strategy(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    with pytest.raises(SystemExit):
+        parse_args(["--input", str(path), "--query-strategy", "other"])
+
+
+def test_build_pipeline_passes_query_strategy_to_classifier(monkeypatch):
+    captured = {}
+
+    class FakeVectorStore:
+        def __init__(self, embedding_service, *, settings):
+            pass
+
+        def count(self) -> int:
+            return 1
+
+    class CapturingClassifier:
+        def __init__(self, vector_store, llm_service, *, query_strategy):
+            captured["query_strategy"] = query_strategy
+
+    monkeypatch.setattr(csv_cli, "EmbeddingService", lambda **kwargs: object())
+    monkeypatch.setattr(csv_cli, "VectorStore", FakeVectorStore)
+    monkeypatch.setattr(csv_cli, "LLMService", lambda **kwargs: object())
+    monkeypatch.setattr(csv_cli, "FieldClassificationService", CapturingClassifier)
+    monkeypatch.setattr(csv_cli, "BenchmarkTargetRepository", lambda url: object())
+    settings = SimpleNamespace(
+        target_database_url="sqlite://",
+        embedding_model_path="model",
+        deepseek_model="llm",
+        knowledge_base_version="kb",
+    )
+
+    csv_cli.build_pipeline(settings, query_strategy="clean")
+
+    assert captured["query_strategy"] == "clean"

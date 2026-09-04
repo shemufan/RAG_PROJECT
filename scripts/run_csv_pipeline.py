@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.config import load_settings
+from app.rag.retrieval_query import QueryStrategy
 from app.repositories.benchmark_target import BenchmarkTargetRepository
 from app.repositories.vector_store import VectorStore
 from app.schemas.csv_input import CSVInputBatch, LabelMatchSummary
@@ -51,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sample-columns", help="comma-separated catalog columns")
     parser.add_argument("--resume-run", type=UUID)
     parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument(
+        "--query-strategy",
+        choices=("legacy", "clean", "profile"),
+        default="profile",
+        help="retrieval Query strategy; use the same value when resuming a run",
+    )
     return parser
 
 
@@ -124,7 +131,10 @@ def apply_limit(
     return limited_batch, limited_labels
 
 
-def build_pipeline(settings) -> CSVClassificationPipeline:
+def build_pipeline(
+    settings,
+    query_strategy: QueryStrategy = "profile",
+) -> CSVClassificationPipeline:
     if not settings.target_database_url:
         raise SystemExit("TARGET_DATABASE_URL is not configured")
     embedding_service = EmbeddingService(model_path=settings.embedding_model_path)
@@ -136,6 +146,7 @@ def build_pipeline(settings) -> CSVClassificationPipeline:
     classifier = FieldClassificationService(
         vector_store,
         LLMService(settings=settings),
+        query_strategy=query_strategy,
     )
     return CSVClassificationPipeline(
         BenchmarkTargetRepository(settings.target_database_url),
@@ -177,7 +188,7 @@ def main() -> None:
     batch = load_csv_batch(args)
     labels = load_labels(batch, args)
     batch, labels = apply_limit(batch, labels, args.limit)
-    pipeline = build_pipeline(load_settings())
+    pipeline = build_pipeline(load_settings(), args.query_strategy)
     if args.resume_run is None:
         summary = pipeline.run(batch, labels)
     else:
