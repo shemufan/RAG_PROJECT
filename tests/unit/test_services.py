@@ -10,6 +10,7 @@ from app.services.classification_service import FieldClassificationService
 from app.services.embedding_service import EmbeddingService
 from app.services.knowledge_service import load_knowledge_documents
 from app.services.llm_service import LLMService
+from app.services.value_profiler import ValueProfile
 
 
 class FakeVectorStore:
@@ -90,13 +91,13 @@ def test_embedding_service_loads_configured_model_offline(monkeypatch, tmp_path)
     }
 
 
-def test_classification_service_returns_structured_result():
+def test_classification_service_uses_profiled_query_and_keeps_llm_prompt():
     store = FakeVectorStore(
         [
             Evidence(
-                content="身份证件号码属于敏感个人信息。",
-                source="个人信息保护法.txt",
-                article="第二十八条",
+                content="MAC地址属于设备标识信息。",
+                source="个人信息安全规范.txt",
+                article="附录A",
                 score=0.91,
             )
         ]
@@ -104,26 +105,74 @@ def test_classification_service_returns_structured_result():
     llm = FakeLanguageModel(
         ClassificationOutput(
             is_personal=True,
-            category="敏感个人信息",
-            subcategory="身份标识",
-            level="L4",
+            category="个人常用设备信息",
+            subcategory="MAC地址",
+            level="L3",
             confidence=0.92,
-            reason="依据第二十八条。",
+            reason="依据设备标识规则。",
             need_review=False,
         )
     )
     service = FieldClassificationService(store, llm)
-
-    result = service.classify_field(
-        FieldProfile(field_name="id_card", field_cn="身份证号")
+    profile = FieldProfile(
+        source_system="csv",
+        database_name="csv_source",
+        table_name="catalog_input",
+        field_name="attr_01",
+        field_cn="设备属性",
+        field_comment="辅助说明",
+        data_type="unknown",
+        sample_values=["A1:B2:C3:D4:E5:F6"],
+        business_domain="general",
     )
 
-    assert "id_card" in store.query
-    assert "身份证号" in store.query
-    assert "身份证件号码属于敏感个人信息" in llm.prompt[1].content
-    assert result.level == "L4"
+    result = service.classify_field(profile)
+
+    assert "字段名：attr_01" in store.query
+    assert "MAC地址" in store.query
+    assert "设备标识信息" in store.query
+    for forbidden in (
+        "设备属性",
+        "辅助说明",
+        "csv_source",
+        "catalog_input",
+        "general",
+        "unknown",
+    ):
+        assert forbidden not in store.query
+    assert '"field_cn": "设备属性"' in llm.prompt[1].content
+    assert "MAC地址属于设备标识信息" in llm.prompt[1].content
+    assert result.level == "L3"
     assert result.is_personal is True
     assert result.decision_path == "rag_llm"
+
+
+def test_classification_service_build_query_delegates_to_injected_components():
+    class StubProfiler:
+        def profile(self, field_name: str, sample_values: list[str]):
+            assert field_name == "column_x"
+            assert sample_values == ["sample"]
+            return ValueProfile(features=["stub feature"])
+
+    class StubBuilder:
+        def build(self, field_name: str, sample_values: list[str], value_profile):
+            assert field_name == "column_x"
+            assert sample_values == ["sample"]
+            assert value_profile.features == ["stub feature"]
+            return "clean query"
+
+    service = FieldClassificationService(
+        object(),
+        object(),
+        value_profiler=StubProfiler(),
+        query_builder=StubBuilder(),
+    )
+
+    query = service.build_query_text(
+        FieldProfile(field_name="column_x", sample_values=["sample"])
+    )
+
+    assert query == "clean query"
 
 
 def test_classification_service_returns_unknown_when_dependency_fails():

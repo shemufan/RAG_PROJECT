@@ -3,8 +3,10 @@
 import logging
 
 from app.rag.prompt import build_classification_prompt
+from app.rag.retrieval_query import RetrievalQueryBuilder
 from app.schemas.classification import ClassificationResult
 from app.schemas.field import FieldProfile
+from app.services.value_profiler import ValueProfiler
 
 logger = logging.getLogger(__name__)
 
@@ -12,23 +14,29 @@ logger = logging.getLogger(__name__)
 class FieldClassificationService:
     """Coordinate vector retrieval and structured language-model inference."""
 
-    def __init__(self, vector_store, llm_service):
+    def __init__(
+        self,
+        vector_store,
+        llm_service,
+        *,
+        value_profiler: ValueProfiler | None = None,
+        query_builder: RetrievalQueryBuilder | None = None,
+    ):
         self.vector_store = vector_store
         self.llm_service = llm_service
+        self.value_profiler = value_profiler or ValueProfiler()
+        self.query_builder = query_builder or RetrievalQueryBuilder()
 
     def build_query_text(self, field: FieldProfile) -> str:
-        values = {
-            "field_name": field.field_name,
-            "field_cn": field.field_cn,
-            "field_comment": field.field_comment,
-            "data_type": field.data_type,
-            "sample_values": "、".join(field.sample_values),
-            "business_domain": field.business_domain,
-            "table_name": field.table_name,
-            "database_name": field.database_name,
-            "source_system": field.source_system,
-        }
-        return "\n".join(f"{key}: {value}" for key, value in values.items() if value)
+        value_profile = self.value_profiler.profile(
+            field.field_name,
+            field.sample_values,
+        )
+        return self.query_builder.build(
+            field.field_name,
+            field.sample_values,
+            value_profile,
+        )
 
     def classify_field(self, field: FieldProfile | dict) -> ClassificationResult:
         profile = FieldProfile.model_validate(field)
