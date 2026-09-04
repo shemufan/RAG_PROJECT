@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import ModuleType
 
+import pytest
 from langchain_core.documents import Document
 
 from app.repositories.vector_store import map_retrieved_document
@@ -10,16 +11,17 @@ from app.services.classification_service import FieldClassificationService
 from app.services.embedding_service import EmbeddingService
 from app.services.knowledge_service import load_knowledge_documents
 from app.services.llm_service import LLMService
-from app.services.value_profiler import ValueProfile
 
 
 class FakeVectorStore:
     def __init__(self, evidence: list[Evidence]):
         self.evidence = evidence
         self.query = ""
+        self.k = 0
 
     def search(self, query: str, k: int = 3) -> list[Evidence]:
         self.query = query
+        self.k = k
         return self.evidence[:k]
 
 
@@ -147,24 +149,16 @@ def test_classification_service_uses_profiled_query_and_keeps_llm_prompt():
     assert result.decision_path == "rag_llm"
 
 
-def test_classification_service_build_query_delegates_to_injected_components():
-    class StubProfiler:
-        def profile(self, field_name: str, sample_values: list[str]):
-            assert field_name == "column_x"
-            assert sample_values == ["sample"]
-            return ValueProfile(features=["stub feature"])
-
+def test_classification_service_delegates_to_injected_query_builder():
     class StubBuilder:
-        def build(self, field_name: str, sample_values: list[str], value_profile):
-            assert field_name == "column_x"
-            assert sample_values == ["sample"]
-            assert value_profile.features == ["stub feature"]
+        def build(self, field: FieldProfile) -> str:
+            assert field.field_name == "column_x"
+            assert field.sample_values == ["sample"]
             return "clean query"
 
     service = FieldClassificationService(
         object(),
         object(),
-        value_profiler=StubProfiler(),
         query_builder=StubBuilder(),
     )
 
@@ -173,6 +167,48 @@ def test_classification_service_build_query_delegates_to_injected_components():
     )
 
     assert query == "clean query"
+
+
+@pytest.mark.parametrize(
+    ("strategy", "expected_query_fragment"),
+    [
+        ("legacy", "field_cn: 设备属性"),
+        ("clean", "field_name: attr_01"),
+        ("profile", "候选数据类型：MAC地址、设备标识信息"),
+    ],
+)
+def test_classification_service_retrieves_with_each_query_strategy(
+    strategy: str,
+    expected_query_fragment: str,
+):
+    store = FakeVectorStore(
+        [Evidence(content="设备标识规则", source="rules.md", score=0.9)]
+    )
+    llm = FakeLanguageModel(
+        ClassificationOutput(
+            is_personal=True,
+            category="个人常用设备信息",
+            subcategory="MAC地址",
+            level="L3",
+            confidence=0.9,
+            reason="设备标识规则",
+            need_review=False,
+        )
+    )
+    service = FieldClassificationService(store, llm, query_strategy=strategy)
+
+    result = service.classify_field(
+        FieldProfile(
+            field_name="attr_01",
+            field_cn="设备属性",
+            sample_values=["A1:B2:C3:D4:E5:F6"],
+        )
+    )
+
+    assert expected_query_fragment in store.query
+    assert store.k == 3
+    assert "设备标识规则" in llm.prompt[1].content
+    assert result.decision_path == "rag_llm"
 
 
 def test_classification_service_returns_unknown_when_dependency_fails():

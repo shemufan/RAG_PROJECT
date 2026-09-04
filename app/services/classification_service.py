@@ -3,10 +3,13 @@
 import logging
 
 from app.rag.prompt import build_classification_prompt
-from app.rag.retrieval_query import RetrievalQueryBuilder
+from app.rag.retrieval_query import (
+    QueryBuilder,
+    QueryStrategy,
+    create_query_builder,
+)
 from app.schemas.classification import ClassificationResult
 from app.schemas.field import FieldProfile
-from app.services.value_profiler import ValueProfiler
 
 logger = logging.getLogger(__name__)
 
@@ -19,24 +22,19 @@ class FieldClassificationService:
         vector_store,
         llm_service,
         *,
-        value_profiler: ValueProfiler | None = None,
-        query_builder: RetrievalQueryBuilder | None = None,
+        query_strategy: QueryStrategy = "profile",
+        query_builder: QueryBuilder | None = None,
     ):
         self.vector_store = vector_store
         self.llm_service = llm_service
-        self.value_profiler = value_profiler or ValueProfiler()
-        self.query_builder = query_builder or RetrievalQueryBuilder()
+        self.query_builder = (
+            query_builder
+            if query_builder is not None
+            else create_query_builder(query_strategy)
+        )
 
     def build_query_text(self, field: FieldProfile) -> str:
-        value_profile = self.value_profiler.profile(
-            field.field_name,
-            field.sample_values,
-        )
-        return self.query_builder.build(
-            field.field_name,
-            field.sample_values,
-            value_profile,
-        )
+        return self.query_builder.build(field)
 
     def classify_field(self, field: FieldProfile | dict) -> ClassificationResult:
         profile = FieldProfile.model_validate(field)
