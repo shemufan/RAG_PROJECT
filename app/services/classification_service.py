@@ -28,9 +28,11 @@ class FieldClassificationService:
         profile_query_mode: ProfileQueryMode = "c",
         value_profiler: ValueProfilerProtocol | None = None,
         query_builder: QueryBuilder | None = None,
+        use_rag: bool = True,
     ):
         self.vector_store = vector_store
         self.llm_service = llm_service
+        self.use_rag = use_rag
         self.query_builder = (
             query_builder
             if query_builder is not None
@@ -47,9 +49,14 @@ class FieldClassificationService:
     def classify_field(self, field: FieldProfile | dict) -> ClassificationResult:
         profile = FieldProfile.model_validate(field)
         try:
-            evidence = self.vector_store.search(self.build_query_text(profile), k=3)
-            if not evidence:
-                raise RuntimeError("知识库未检索到可用依据")
+            evidence = []
+            if self.use_rag:
+                evidence = self.vector_store.search(
+                    self.build_query_text(profile),
+                    k=3,
+                )
+                if not evidence:
+                    raise RuntimeError("知识库未检索到可用依据")
             output = self.llm_service.classify(
                 build_classification_prompt(profile, evidence)
             )

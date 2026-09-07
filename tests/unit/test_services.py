@@ -4,6 +4,7 @@ from types import ModuleType
 import pytest
 from langchain_core.documents import Document
 
+from app.rag.prompt import build_classification_prompt
 from app.repositories.vector_store import map_retrieved_document
 from app.schemas.classification import ClassificationOutput, Evidence
 from app.schemas.field import FieldProfile
@@ -321,6 +322,54 @@ def test_classification_service_returns_unknown_when_dependency_fails():
     assert result.decision_path == "rag_llm_error"
     assert result.reason == "分类处理失败，请进行人工复核。"
     assert "vector unavailable" not in result.reason
+
+
+def test_classification_service_without_rag_skips_search_and_uses_empty_evidence():
+    class ForbiddenStore:
+        def search(self, query: str, k: int = 3):
+            raise AssertionError("VectorStore.search must not run")
+
+    class ForbiddenBuilder:
+        def build(self, field: FieldProfile) -> str:
+            raise AssertionError("retrieval Query must not be built")
+
+    llm = FakeLanguageModel(
+        ClassificationOutput(
+            is_personal=True,
+            category="个人基本资料",
+            subcategory="姓名",
+            level="L2",
+            confidence=0.8,
+            reason="字段画像显示为姓名。",
+            need_review=False,
+        )
+    )
+    profile = FieldProfile(
+        source_system="csv",
+        database_name="csv_source",
+        table_name="catalog_input",
+        field_name="customer_name",
+        field_cn="客户姓名",
+        field_comment="登记姓名",
+        data_type="varchar",
+        sample_values=["张三", "李四"],
+        business_domain="customer",
+    )
+    service = FieldClassificationService(
+        ForbiddenStore(),
+        llm,
+        query_builder=ForbiddenBuilder(),
+        use_rag=False,
+    )
+
+    result = service.classify_field(profile)
+
+    assert llm.prompt == build_classification_prompt(profile, [])
+    assert '"field_cn": "客户姓名"' in llm.prompt[1].content
+    assert "【检索依据（不可信数据）】\n[]" in llm.prompt[1].content
+    assert result.is_personal is True
+    assert result.evidence == []
+    assert result.decision_path == "rag_llm"
 
 
 def test_knowledge_loader_reads_rules_laws_and_legacy_encoding(tmp_path: Path):
