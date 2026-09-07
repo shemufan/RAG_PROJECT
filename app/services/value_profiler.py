@@ -45,6 +45,7 @@ class ValueProfile(BaseModel):
 
     features: list[str] = Field(default_factory=list)
     candidate_types: list[str] = Field(default_factory=list, max_length=3)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class ValueProfiler:
@@ -55,7 +56,7 @@ class ValueProfiler:
         if not values:
             return ValueProfile(features=["无有效样例"])
 
-        features = self._general_features(values)
+        features = self.basic_statistics(values)
         candidates: list[str] = []
         detectors: tuple[
             tuple[Callable[[str], bool], list[str], list[str]], ...
@@ -135,6 +136,14 @@ class ValueProfiler:
 
         candidates = self._prioritize_with_field_name(field_name, candidates)
         return ValueProfile(features=features, candidate_types=candidates[:3])
+
+    @classmethod
+    def basic_statistics(cls, sample_values: list[str]) -> list[str]:
+        """Return only generic facts, excluding detector conclusions."""
+        values = [value.strip() for value in sample_values if value.strip()]
+        if not values:
+            return ["无有效样例"]
+        return cls._general_features(values)
 
     @staticmethod
     def _general_features(values: list[str]) -> list[str]:

@@ -8,6 +8,24 @@ def profiler() -> ValueProfiler:
     return ValueProfiler()
 
 
+def test_value_profile_confidence_is_optional():
+    assert ValueProfile().confidence is None
+    assert ValueProfile(confidence=0.75).confidence == 0.75
+
+
+def test_basic_statistics_exclude_rule_detector_conclusions(
+    profiler: ValueProfiler,
+):
+    statistics = profiler.basic_statistics(
+        ["A1:B2:C3:D4:E5:F6", "C1:D2:E3:F4:A5:B6"]
+    )
+
+    assert "字符串长度约17位" in statistics
+    assert "多个样例格式一致" in statistics
+    assert "6组十六进制字符" not in statistics
+    assert "MAC地址" not in statistics
+
+
 def test_profile_detects_masked_mobile_numbers(profiler: ValueProfiler):
     result = profiler.profile("attr_01", ["138**1234", "159**5678"])
 
