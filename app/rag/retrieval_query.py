@@ -167,6 +167,7 @@ def create_query_builder(
     strategy: str,
     *,
     profile_mode: ProfileQueryMode = "c",
+    value_profiler: ValueProfilerProtocol | None = None,
 ) -> QueryBuilder:
     """Create one Query builder or reject an unsupported strategy."""
 
@@ -178,5 +179,8 @@ def create_query_builder(
             f"unsupported query strategy {strategy!r}; choose from {choices}"
         ) from exc
     if strategy == "profile":
-        return RetrievalQueryBuilder(profile_mode=profile_mode)
+        return RetrievalQueryBuilder(
+            value_profiler=value_profiler,
+            profile_mode=profile_mode,
+        )
     return builder_factory()

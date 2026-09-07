@@ -151,6 +151,26 @@ def test_factory_passes_profile_submode_to_profile_builder():
     assert "候选数据类型：" not in query
 
 
+def test_factory_injects_selected_value_profiler():
+    profiler = StaticProfiler(
+        ValueProfile(
+            features=["LLM结构特征"],
+            candidate_types=["LLM候选类型"],
+        )
+    )
+    builder = create_query_builder(
+        "profile",
+        profile_mode="c2",
+        value_profiler=profiler,
+    )
+
+    query = builder.build(noisy_field())
+
+    assert profiler.call_count == 1
+    assert "候选数据类型：LLM候选类型" in query
+    assert "数据结构特征：" not in query
+
+
 def test_profile_builder_selects_at_most_three_representative_values():
     builder = RetrievalQueryBuilder(
         value_profiler=StaticProfiler(ValueProfile(features=["存在脱敏字符"]))

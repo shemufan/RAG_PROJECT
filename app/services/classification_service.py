@@ -7,6 +7,7 @@ from app.rag.retrieval_query import (
     ProfileQueryMode,
     QueryBuilder,
     QueryStrategy,
+    ValueProfilerProtocol,
     create_query_builder,
 )
 from app.schemas.classification import ClassificationResult
@@ -25,6 +26,7 @@ class FieldClassificationService:
         *,
         query_strategy: QueryStrategy = "profile",
         profile_query_mode: ProfileQueryMode = "c",
+        value_profiler: ValueProfilerProtocol | None = None,
         query_builder: QueryBuilder | None = None,
     ):
         self.vector_store = vector_store
@@ -35,6 +37,7 @@ class FieldClassificationService:
             else create_query_builder(
                 query_strategy,
                 profile_mode=profile_query_mode,
+                value_profiler=value_profiler,
             )
         )
 

@@ -259,6 +259,54 @@ def test_classification_service_retrieves_with_each_profile_submode(
     assert result.decision_path == "rag_llm"
 
 
+def test_classification_service_uses_injected_value_profiler():
+    class StaticProfiler:
+        def profile(self, field_name: str, sample_values: list[str]):
+            assert field_name == "attr_01"
+            assert sample_values == ["A1:B2:C3:D4:E5:F6"]
+            from app.services.value_profiler import ValueProfile
+
+            return ValueProfile(
+                features=["LLM结构特征"],
+                candidate_types=["LLM候选类型"],
+            )
+
+    store = FakeVectorStore(
+        [Evidence(content="设备标识规则", source="rules.md", score=0.9)]
+    )
+    llm = FakeLanguageModel(
+        ClassificationOutput(
+            is_personal=True,
+            category="个人常用设备信息",
+            subcategory="设备标识",
+            level="L3",
+            confidence=0.9,
+            reason="设备标识规则",
+            need_review=False,
+        )
+    )
+    service = FieldClassificationService(
+        store,
+        llm,
+        query_strategy="profile",
+        profile_query_mode="c2",
+        value_profiler=StaticProfiler(),
+    )
+
+    result = service.classify_field(
+        FieldProfile(
+            field_name="attr_01",
+            sample_values=["A1:B2:C3:D4:E5:F6"],
+        )
+    )
+
+    assert "候选数据类型：LLM候选类型" in store.query
+    assert "数据结构特征：" not in store.query
+    assert store.k == 3
+    assert "设备标识规则" in llm.prompt[1].content
+    assert result.decision_path == "rag_llm"
+
+
 def test_classification_service_returns_unknown_when_dependency_fails():
     class FailingStore:
         def search(self, query: str, k: int = 3):
