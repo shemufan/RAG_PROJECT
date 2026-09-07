@@ -179,4 +179,7 @@ class LLMValueProfiler:
                 type(exc).__name__,
             )
         finally:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass

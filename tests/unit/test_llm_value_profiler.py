@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.services.llm_value_profiler import LLMValueProfiler
@@ -154,3 +155,29 @@ def test_llm_profiler_skips_call_when_samples_are_empty(tmp_path):
 
     assert result == ValueProfile()
     assert model.calls == []
+
+
+def test_llm_profiler_keeps_result_when_temp_cache_cleanup_fails(
+    tmp_path,
+    monkeypatch,
+):
+    model = FakeStructuredModel(
+        {"features": ["长度一致"], "candidate_types": ["联系方式"]}
+    )
+    profiler = LLMValueProfiler(
+        structured_model=model,
+        settings=fake_settings(tmp_path),
+        cache_dir=tmp_path / "cache",
+    )
+    original_unlink = Path.unlink
+
+    def fail_temp_cleanup(path: Path, missing_ok: bool = False):
+        if path.suffix == ".tmp":
+            raise PermissionError("locked temporary file")
+        return original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_temp_cleanup)
+
+    result = profiler.profile("contact_attr", ["138**1234"])
+
+    assert result.candidate_types == ["联系方式"]
