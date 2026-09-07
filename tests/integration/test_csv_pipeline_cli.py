@@ -167,6 +167,57 @@ def test_cli_rejects_unknown_query_strategy(tmp_path):
         parse_args(["--input", str(path), "--query-strategy", "other"])
 
 
+@pytest.mark.parametrize("mode", ["c", "c1", "c2"])
+def test_cli_accepts_profile_query_mode(tmp_path, mode: str):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    args = parse_args(
+        [
+            "--input",
+            str(path),
+            "--query-strategy",
+            "profile",
+            "--query-mode",
+            mode,
+        ]
+    )
+
+    assert args.query_mode == mode
+
+
+def test_cli_defaults_profile_query_mode_to_full_c(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    assert parse_args(["--input", str(path)]).query_mode == "c"
+
+
+def test_cli_rejects_unknown_profile_query_mode(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    with pytest.raises(SystemExit):
+        parse_args(["--input", str(path), "--query-mode", "other"])
+
+
+def test_cli_rejects_profile_submode_for_non_profile_strategy(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--input",
+                str(path),
+                "--query-strategy",
+                "clean",
+                "--query-mode",
+                "c1",
+            ]
+        )
+
+
 def test_build_pipeline_passes_query_strategy_to_classifier(monkeypatch):
     captured = {}
 
@@ -178,8 +229,16 @@ def test_build_pipeline_passes_query_strategy_to_classifier(monkeypatch):
             return 1
 
     class CapturingClassifier:
-        def __init__(self, vector_store, llm_service, *, query_strategy):
+        def __init__(
+            self,
+            vector_store,
+            llm_service,
+            *,
+            query_strategy,
+            profile_query_mode,
+        ):
             captured["query_strategy"] = query_strategy
+            captured["profile_query_mode"] = profile_query_mode
 
     monkeypatch.setattr(csv_cli, "EmbeddingService", lambda **kwargs: object())
     monkeypatch.setattr(csv_cli, "VectorStore", FakeVectorStore)
@@ -193,6 +252,13 @@ def test_build_pipeline_passes_query_strategy_to_classifier(monkeypatch):
         knowledge_base_version="kb",
     )
 
-    csv_cli.build_pipeline(settings, query_strategy="clean")
+    csv_cli.build_pipeline(
+        settings,
+        query_strategy="profile",
+        profile_query_mode="c2",
+    )
 
-    assert captured["query_strategy"] == "clean"
+    assert captured == {
+        "query_strategy": "profile",
+        "profile_query_mode": "c2",
+    }

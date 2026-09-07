@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.config import load_settings
-from app.rag.retrieval_query import QueryStrategy
+from app.rag.retrieval_query import ProfileQueryMode, QueryStrategy
 from app.repositories.benchmark_target import BenchmarkTargetRepository
 from app.repositories.vector_store import VectorStore
 from app.schemas.csv_input import CSVInputBatch, LabelMatchSummary
@@ -58,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="profile",
         help="retrieval Query strategy; use the same value when resuming a run",
     )
+    parser.add_argument(
+        "--query-mode",
+        choices=("c", "c1", "c2"),
+        default="c",
+        help="profile Query submode: c=full, c1=features only, c2=candidates only",
+    )
     return parser
 
 
@@ -74,6 +80,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--label-column requires catalog input (one field per row)")
     if args.limit is not None and args.resume_run is not None:
         parser.error("--limit applies to a new run and cannot be used with --resume-run")
+    if args.query_strategy != "profile" and args.query_mode != "c":
+        parser.error("--query-mode c1/c2 requires --query-strategy profile")
     return args
 
 
@@ -134,6 +142,7 @@ def apply_limit(
 def build_pipeline(
     settings,
     query_strategy: QueryStrategy = "profile",
+    profile_query_mode: ProfileQueryMode = "c",
 ) -> CSVClassificationPipeline:
     if not settings.target_database_url:
         raise SystemExit("TARGET_DATABASE_URL is not configured")
@@ -147,6 +156,7 @@ def build_pipeline(
         vector_store,
         LLMService(settings=settings),
         query_strategy=query_strategy,
+        profile_query_mode=profile_query_mode,
     )
     return CSVClassificationPipeline(
         BenchmarkTargetRepository(settings.target_database_url),
@@ -188,7 +198,11 @@ def main() -> None:
     batch = load_csv_batch(args)
     labels = load_labels(batch, args)
     batch, labels = apply_limit(batch, labels, args.limit)
-    pipeline = build_pipeline(load_settings(), args.query_strategy)
+    pipeline = build_pipeline(
+        load_settings(),
+        args.query_strategy,
+        args.query_mode,
+    )
     if args.resume_run is None:
         summary = pipeline.run(batch, labels)
     else:
