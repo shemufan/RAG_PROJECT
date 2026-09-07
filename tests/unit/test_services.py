@@ -211,6 +211,54 @@ def test_classification_service_retrieves_with_each_query_strategy(
     assert result.decision_path == "rag_llm"
 
 
+@pytest.mark.parametrize(
+    ("mode", "has_features", "has_candidates"),
+    [
+        ("c", True, True),
+        ("c1", True, False),
+        ("c2", False, True),
+    ],
+)
+def test_classification_service_retrieves_with_each_profile_submode(
+    mode: str,
+    has_features: bool,
+    has_candidates: bool,
+):
+    store = FakeVectorStore(
+        [Evidence(content="设备标识规则", source="rules.md", score=0.9)]
+    )
+    llm = FakeLanguageModel(
+        ClassificationOutput(
+            is_personal=True,
+            category="个人常用设备信息",
+            subcategory="MAC地址",
+            level="L3",
+            confidence=0.9,
+            reason="设备标识规则",
+            need_review=False,
+        )
+    )
+    service = FieldClassificationService(
+        store,
+        llm,
+        query_strategy="profile",
+        profile_query_mode=mode,
+    )
+
+    result = service.classify_field(
+        FieldProfile(
+            field_name="attr_01",
+            sample_values=["A1:B2:C3:D4:E5:F6"],
+        )
+    )
+
+    assert store.k == 3
+    assert ("数据结构特征：" in store.query) is has_features
+    assert ("候选数据类型：" in store.query) is has_candidates
+    assert "设备标识规则" in llm.prompt[1].content
+    assert result.decision_path == "rag_llm"
+
+
 def test_classification_service_returns_unknown_when_dependency_fails():
     class FailingStore:
         def search(self, query: str, k: int = 3):

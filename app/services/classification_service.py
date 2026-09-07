@@ -4,6 +4,7 @@ import logging
 
 from app.rag.prompt import build_classification_prompt
 from app.rag.retrieval_query import (
+    ProfileQueryMode,
     QueryBuilder,
     QueryStrategy,
     create_query_builder,
@@ -23,6 +24,7 @@ class FieldClassificationService:
         llm_service,
         *,
         query_strategy: QueryStrategy = "profile",
+        profile_query_mode: ProfileQueryMode = "c",
         query_builder: QueryBuilder | None = None,
     ):
         self.vector_store = vector_store
@@ -30,7 +32,10 @@ class FieldClassificationService:
         self.query_builder = (
             query_builder
             if query_builder is not None
-            else create_query_builder(query_strategy)
+            else create_query_builder(
+                query_strategy,
+                profile_mode=profile_query_mode,
+            )
         )
 
     def build_query_text(self, field: FieldProfile) -> str:
