@@ -260,6 +260,44 @@ def test_cli_rejects_llm_profiling_for_non_profile_strategy(tmp_path):
         )
 
 
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [("--use-rag", True), ("--no-use-rag", False)],
+)
+def test_cli_accepts_rag_switch(tmp_path, flag: str, expected: bool):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    args = parse_args(
+        ["--input", str(path), "--query-strategy", "clean", flag]
+    )
+
+    assert args.use_rag is expected
+
+
+def test_cli_enables_rag_by_default(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    assert parse_args(["--input", str(path)]).use_rag is True
+
+
+def test_cli_rejects_no_rag_for_non_clean_strategy(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--input",
+                str(path),
+                "--query-strategy",
+                "profile",
+                "--no-use-rag",
+            ]
+        )
+
+
 def test_build_pipeline_passes_llm_profiler_to_classifier(monkeypatch):
     captured = {}
     profiler = object()
@@ -280,10 +318,12 @@ def test_build_pipeline_passes_llm_profiler_to_classifier(monkeypatch):
             query_strategy,
             profile_query_mode,
             value_profiler,
+            use_rag,
         ):
             captured["query_strategy"] = query_strategy
             captured["profile_query_mode"] = profile_query_mode
             captured["value_profiler"] = value_profiler
+            captured["use_rag"] = use_rag
 
     monkeypatch.setattr(csv_cli, "EmbeddingService", lambda **kwargs: object())
     monkeypatch.setattr(csv_cli, "VectorStore", FakeVectorStore)
@@ -309,6 +349,7 @@ def test_build_pipeline_passes_llm_profiler_to_classifier(monkeypatch):
         "query_strategy": "profile",
         "profile_query_mode": "c2",
         "value_profiler": profiler,
+        "use_rag": True,
     }
 
 
@@ -344,4 +385,45 @@ def test_build_pipeline_keeps_rule_profiler_as_default(monkeypatch):
         "query_strategy": "profile",
         "profile_query_mode": "c",
         "value_profiler": None,
+        "use_rag": True,
+    }
+
+
+def test_build_pipeline_passes_no_rag_to_classifier(monkeypatch):
+    captured = {}
+
+    class FakeVectorStore:
+        def __init__(self, embedding_service, *, settings):
+            pass
+
+        def count(self) -> int:
+            return 1
+
+    class CapturingClassifier:
+        def __init__(self, vector_store, llm_service, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(csv_cli, "EmbeddingService", lambda **kwargs: object())
+    monkeypatch.setattr(csv_cli, "VectorStore", FakeVectorStore)
+    monkeypatch.setattr(csv_cli, "LLMService", lambda **kwargs: object())
+    monkeypatch.setattr(csv_cli, "FieldClassificationService", CapturingClassifier)
+    monkeypatch.setattr(csv_cli, "BenchmarkTargetRepository", lambda url: object())
+    settings = SimpleNamespace(
+        target_database_url="sqlite://",
+        embedding_model_path="model",
+        deepseek_model="llm",
+        knowledge_base_version="kb",
+    )
+
+    csv_cli.build_pipeline(
+        settings,
+        query_strategy="clean",
+        use_rag=False,
+    )
+
+    assert captured == {
+        "query_strategy": "clean",
+        "profile_query_mode": "c",
+        "value_profiler": None,
+        "use_rag": False,
     }

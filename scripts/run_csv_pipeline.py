@@ -71,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="rule",
         help="Value Profiling implementation; use the same value when resuming",
     )
+    parser.add_argument(
+        "--use-rag",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="include retrieved Evidence in final classification",
+    )
     return parser
 
 
@@ -91,6 +97,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--query-mode c1/c2 requires --query-strategy profile")
     if args.query_strategy != "profile" and args.profiling_mode != "rule":
         parser.error("--profiling-mode llm requires --query-strategy profile")
+    if not args.use_rag and args.query_strategy != "clean":
+        parser.error("--no-use-rag requires --query-strategy clean")
     return args
 
 
@@ -153,6 +161,7 @@ def build_pipeline(
     query_strategy: QueryStrategy = "profile",
     profile_query_mode: ProfileQueryMode = "c",
     profiling_mode: ProfilingMode = "rule",
+    use_rag: bool = True,
 ) -> CSVClassificationPipeline:
     if not settings.target_database_url:
         raise SystemExit("TARGET_DATABASE_URL is not configured")
@@ -171,6 +180,7 @@ def build_pipeline(
         query_strategy=query_strategy,
         profile_query_mode=profile_query_mode,
         value_profiler=value_profiler,
+        use_rag=use_rag,
     )
     return CSVClassificationPipeline(
         BenchmarkTargetRepository(settings.target_database_url),
@@ -217,6 +227,7 @@ def main() -> None:
         args.query_strategy,
         args.query_mode,
         args.profiling_mode,
+        use_rag=args.use_rag,
     )
     if args.resume_run is None:
         summary = pipeline.run(batch, labels)
