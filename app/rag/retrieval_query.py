@@ -11,6 +11,13 @@ if TYPE_CHECKING:
     from app.services.value_profiler import ValueProfile
 
 QueryStrategy = Literal["legacy", "clean", "profile"]
+ProfileQueryMode = Literal["c", "c1", "c2"]
+
+_PROFILE_SECTIONS: dict[str, tuple[bool, bool]] = {
+    "c": (True, True),
+    "c1": (True, False),
+    "c2": (False, True),
+}
 
 
 class QueryBuilder(Protocol):
@@ -68,12 +75,23 @@ class RetrievalQueryBuilder:
     def __init__(
         self,
         value_profiler: ValueProfilerProtocol | None = None,
+        *,
+        profile_mode: ProfileQueryMode = "c",
     ) -> None:
         if value_profiler is None:
             from app.services.value_profiler import ValueProfiler
 
             value_profiler = ValueProfiler()
+        try:
+            include_features, include_candidates = _PROFILE_SECTIONS[profile_mode]
+        except KeyError as exc:
+            raise ValueError(
+                f"unsupported profile query mode {profile_mode!r}; "
+                "choose from c, c1, c2"
+            ) from exc
         self.value_profiler = value_profiler
+        self.include_features = include_features
+        self.include_candidates = include_candidates
 
     def build(self, field: FieldProfile) -> str:
         value_profile = self.value_profiler.profile(
@@ -84,9 +102,9 @@ class RetrievalQueryBuilder:
         samples = self._representative_values(field.sample_values)
         if samples:
             parts.append(f"样例值：{'、'.join(samples)}")
-        if value_profile.features:
+        if self.include_features and value_profile.features:
             parts.append(f"数据结构特征：{'、'.join(value_profile.features)}")
-        if value_profile.candidate_types:
+        if self.include_candidates and value_profile.candidate_types:
             parts.append(
                 f"候选数据类型：{'、'.join(value_profile.candidate_types)}"
             )
@@ -145,7 +163,11 @@ _QUERY_BUILDERS: dict[str, Callable[[], QueryBuilder]] = {
 }
 
 
-def create_query_builder(strategy: str) -> QueryBuilder:
+def create_query_builder(
+    strategy: str,
+    *,
+    profile_mode: ProfileQueryMode = "c",
+) -> QueryBuilder:
     """Create one Query builder or reject an unsupported strategy."""
 
     try:
@@ -155,4 +177,6 @@ def create_query_builder(strategy: str) -> QueryBuilder:
         raise ValueError(
             f"unsupported query strategy {strategy!r}; choose from {choices}"
         ) from exc
+    if strategy == "profile":
+        return RetrievalQueryBuilder(profile_mode=profile_mode)
     return builder_factory()

@@ -30,8 +30,10 @@ def noisy_field() -> FieldProfile:
 class StaticProfiler:
     def __init__(self, value_profile: ValueProfile):
         self.value_profile = value_profile
+        self.call_count = 0
 
     def profile(self, field_name: str, sample_values: list[str]) -> ValueProfile:
+        self.call_count += 1
         return self.value_profile
 
 
@@ -88,6 +90,44 @@ def test_profile_builder_calls_value_profiler():
 
 
 @pytest.mark.parametrize(
+    ("mode", "has_features", "has_candidates"),
+    [
+        ("c", True, True),
+        ("c1", True, False),
+        ("c2", False, True),
+    ],
+)
+def test_profile_submode_controls_only_enriched_sections(
+    mode: str,
+    has_features: bool,
+    has_candidates: bool,
+):
+    profiler = StaticProfiler(
+        ValueProfile(
+            features=["6组十六进制字符", "冒号分隔"],
+            candidate_types=["MAC地址", "设备标识信息"],
+        )
+    )
+    builder = RetrievalQueryBuilder(
+        value_profiler=profiler,
+        profile_mode=mode,
+    )
+
+    query = builder.build(noisy_field())
+
+    assert "字段名：device_attr" in query
+    assert "样例值：A1:B2:C3:D4:E5:F6、11:22:33:44:55:66" in query
+    assert ("数据结构特征：" in query) is has_features
+    assert ("候选数据类型：" in query) is has_candidates
+    assert profiler.call_count == 1
+
+
+def test_profile_builder_rejects_unknown_submode():
+    with pytest.raises(ValueError, match="unsupported profile query mode"):
+        RetrievalQueryBuilder(profile_mode="other")
+
+
+@pytest.mark.parametrize(
     ("strategy", "builder_type"),
     [
         ("legacy", LegacyQueryBuilder),
@@ -102,6 +142,13 @@ def test_factory_returns_requested_builder(strategy: str, builder_type: type):
 def test_factory_rejects_unknown_strategy():
     with pytest.raises(ValueError, match="unsupported query strategy"):
         create_query_builder("other")
+
+
+def test_factory_passes_profile_submode_to_profile_builder():
+    query = create_query_builder("profile", profile_mode="c1").build(noisy_field())
+
+    assert "数据结构特征：" in query
+    assert "候选数据类型：" not in query
 
 
 def test_profile_builder_selects_at_most_three_representative_values():
