@@ -218,8 +218,51 @@ def test_cli_rejects_profile_submode_for_non_profile_strategy(tmp_path):
         )
 
 
-def test_build_pipeline_passes_query_strategy_to_classifier(monkeypatch):
+@pytest.mark.parametrize("mode", ["rule", "llm"])
+def test_cli_accepts_profiling_mode(tmp_path, mode: str):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    args = parse_args(["--input", str(path), "--profiling-mode", mode])
+
+    assert args.profiling_mode == mode
+
+
+def test_cli_defaults_profiling_mode_to_rule(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    assert parse_args(["--input", str(path)]).profiling_mode == "rule"
+
+
+def test_cli_rejects_unknown_profiling_mode(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    with pytest.raises(SystemExit):
+        parse_args(["--input", str(path), "--profiling-mode", "other"])
+
+
+def test_cli_rejects_llm_profiling_for_non_profile_strategy(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--input",
+                str(path),
+                "--query-strategy",
+                "clean",
+                "--profiling-mode",
+                "llm",
+            ]
+        )
+
+
+def test_build_pipeline_passes_llm_profiler_to_classifier(monkeypatch):
     captured = {}
+    profiler = object()
 
     class FakeVectorStore:
         def __init__(self, embedding_service, *, settings):
@@ -236,13 +279,16 @@ def test_build_pipeline_passes_query_strategy_to_classifier(monkeypatch):
             *,
             query_strategy,
             profile_query_mode,
+            value_profiler,
         ):
             captured["query_strategy"] = query_strategy
             captured["profile_query_mode"] = profile_query_mode
+            captured["value_profiler"] = value_profiler
 
     monkeypatch.setattr(csv_cli, "EmbeddingService", lambda **kwargs: object())
     monkeypatch.setattr(csv_cli, "VectorStore", FakeVectorStore)
     monkeypatch.setattr(csv_cli, "LLMService", lambda **kwargs: object())
+    monkeypatch.setattr(csv_cli, "LLMValueProfiler", lambda **kwargs: profiler)
     monkeypatch.setattr(csv_cli, "FieldClassificationService", CapturingClassifier)
     monkeypatch.setattr(csv_cli, "BenchmarkTargetRepository", lambda url: object())
     settings = SimpleNamespace(
@@ -256,9 +302,46 @@ def test_build_pipeline_passes_query_strategy_to_classifier(monkeypatch):
         settings,
         query_strategy="profile",
         profile_query_mode="c2",
+        profiling_mode="llm",
     )
 
     assert captured == {
         "query_strategy": "profile",
         "profile_query_mode": "c2",
+        "value_profiler": profiler,
+    }
+
+
+def test_build_pipeline_keeps_rule_profiler_as_default(monkeypatch):
+    captured = {}
+
+    class FakeVectorStore:
+        def __init__(self, embedding_service, *, settings):
+            pass
+
+        def count(self) -> int:
+            return 1
+
+    class CapturingClassifier:
+        def __init__(self, vector_store, llm_service, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(csv_cli, "EmbeddingService", lambda **kwargs: object())
+    monkeypatch.setattr(csv_cli, "VectorStore", FakeVectorStore)
+    monkeypatch.setattr(csv_cli, "LLMService", lambda **kwargs: object())
+    monkeypatch.setattr(csv_cli, "FieldClassificationService", CapturingClassifier)
+    monkeypatch.setattr(csv_cli, "BenchmarkTargetRepository", lambda url: object())
+    settings = SimpleNamespace(
+        target_database_url="sqlite://",
+        embedding_model_path="model",
+        deepseek_model="llm",
+        knowledge_base_version="kb",
+    )
+
+    csv_cli.build_pipeline(settings)
+
+    assert captured == {
+        "query_strategy": "profile",
+        "profile_query_mode": "c",
+        "value_profiler": None,
     }

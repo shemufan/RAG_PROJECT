@@ -20,6 +20,7 @@ from app.services.csv_pipeline import CSVClassificationPipeline
 from app.services.csv_reader import CSVInputError, CSVReader
 from app.services.embedding_service import EmbeddingService
 from app.services.llm_service import LLMService
+from app.services.llm_value_profiler import LLMValueProfiler, ProfilingMode
 from app.services.tabular_csv_adapter import TabularCSVAdapter
 
 
@@ -64,6 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="c",
         help="profile Query submode: c=full, c1=features only, c2=candidates only",
     )
+    parser.add_argument(
+        "--profiling-mode",
+        choices=("rule", "llm"),
+        default="rule",
+        help="Value Profiling implementation; use the same value when resuming",
+    )
     return parser
 
 
@@ -82,6 +89,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--limit applies to a new run and cannot be used with --resume-run")
     if args.query_strategy != "profile" and args.query_mode != "c":
         parser.error("--query-mode c1/c2 requires --query-strategy profile")
+    if args.query_strategy != "profile" and args.profiling_mode != "rule":
+        parser.error("--profiling-mode llm requires --query-strategy profile")
     return args
 
 
@@ -143,6 +152,7 @@ def build_pipeline(
     settings,
     query_strategy: QueryStrategy = "profile",
     profile_query_mode: ProfileQueryMode = "c",
+    profiling_mode: ProfilingMode = "rule",
 ) -> CSVClassificationPipeline:
     if not settings.target_database_url:
         raise SystemExit("TARGET_DATABASE_URL is not configured")
@@ -152,11 +162,15 @@ def build_pipeline(
         raise SystemExit(
             "knowledge base is empty; run python -m scripts.rebuild_knowledge_base"
         )
+    value_profiler = (
+        LLMValueProfiler(settings=settings) if profiling_mode == "llm" else None
+    )
     classifier = FieldClassificationService(
         vector_store,
         LLMService(settings=settings),
         query_strategy=query_strategy,
         profile_query_mode=profile_query_mode,
+        value_profiler=value_profiler,
     )
     return CSVClassificationPipeline(
         BenchmarkTargetRepository(settings.target_database_url),
@@ -202,6 +216,7 @@ def main() -> None:
         load_settings(),
         args.query_strategy,
         args.query_mode,
+        args.profiling_mode,
     )
     if args.resume_run is None:
         summary = pipeline.run(batch, labels)
