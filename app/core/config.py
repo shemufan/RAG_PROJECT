@@ -26,6 +26,9 @@ class Settings:
     embedding_model_path: Path | None
     chroma_db_dir: Path
     chroma_collection: str
+    semantic_chroma_db_dir: Path
+    semantic_chroma_collection: str
+    semantic_knowledge_file: Path
     knowledge_base_version: str
     knowledge_dir: Path
     source_database_url: str | None
@@ -63,6 +66,21 @@ def load_settings(project_root: str | Path = PROJECT_ROOT) -> Settings:
         chroma_collection=os.getenv(
             "CHROMA_COLLECTION",
             "data_classification",
+        ),
+        semantic_chroma_db_dir=_resolve_path(
+            root,
+            os.getenv("SEMANTIC_CHROMA_DB_DIR", ".runtime/semantic_chroma"),
+        ),
+        semantic_chroma_collection=os.getenv(
+            "SEMANTIC_CHROMA_COLLECTION",
+            "semantic_field_types",
+        ),
+        semantic_knowledge_file=_resolve_path(
+            root,
+            os.getenv(
+                "SEMANTIC_KNOWLEDGE_FILE",
+                "data/semantic_knowledge/semantic_cards.json",
+            ),
         ),
         knowledge_base_version=os.getenv("KNOWLEDGE_BASE_VERSION", "v1"),
         knowledge_dir=root / "data" / "knowledge",

@@ -11,6 +11,9 @@ def test_config_loads_project_root_env_and_resolves_relative_paths(tmp_path, mon
         "EMBEDDING_MODEL_PATH",
         "CHROMA_DB_DIR",
         "CHROMA_COLLECTION",
+        "SEMANTIC_CHROMA_DB_DIR",
+        "SEMANTIC_CHROMA_COLLECTION",
+        "SEMANTIC_KNOWLEDGE_FILE",
         "KNOWLEDGE_BASE_VERSION",
         "SOURCE_DATABASE_URL",
         "TARGET_DATABASE_URL",
@@ -31,6 +34,9 @@ def test_config_loads_project_root_env_and_resolves_relative_paths(tmp_path, mon
         "EMBEDDING_MODEL_PATH=models/embedding\n"
         "CHROMA_DB_DIR=.runtime/chroma\n"
         "CHROMA_COLLECTION=test_collection\n"
+        "SEMANTIC_CHROMA_DB_DIR=.runtime/semantic-test\n"
+        "SEMANTIC_CHROMA_COLLECTION=semantic_test_collection\n"
+        "SEMANTIC_KNOWLEDGE_FILE=data/semantic_knowledge/test_cards.json\n"
         "KNOWLEDGE_BASE_VERSION=v-test\n"
         "SOURCE_DATABASE_URL=mysql+pymysql://source/enterprise_source\n"
         "TARGET_DATABASE_URL=mysql+pymysql://target/compliance_result\n"
@@ -50,6 +56,13 @@ def test_config_loads_project_root_env_and_resolves_relative_paths(tmp_path, mon
     assert settings.deepseek_max_retries == 1
     assert settings.embedding_model_path == tmp_path / "models" / "embedding"
     assert settings.chroma_db_dir == tmp_path / ".runtime" / "chroma"
+    assert settings.semantic_chroma_db_dir == tmp_path / ".runtime" / "semantic-test"
+    assert settings.semantic_chroma_collection == "semantic_test_collection"
+    assert settings.semantic_knowledge_file == (
+        tmp_path / "data" / "semantic_knowledge" / "test_cards.json"
+    )
+    assert settings.semantic_chroma_db_dir != settings.chroma_db_dir
+    assert settings.semantic_chroma_collection != settings.chroma_collection
     assert settings.knowledge_dir == tmp_path / "data" / "knowledge"
     assert settings.source_database_url.endswith("/enterprise_source")
     assert settings.target_database_url.endswith("/compliance_result")
