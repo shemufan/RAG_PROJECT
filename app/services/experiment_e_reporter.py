@@ -34,6 +34,8 @@ class ExperimentEReporter:
             summary=directory / "experiment_E_summary.json",
             semantic_debug=directory / "semantic_retrieval_debug.csv",
         )
+        self._result_rows = _read_csv(self.paths.results)
+        self._debug_rows = _read_csv(self.paths.semantic_debug)
 
     def record_case(self, case, result, prediction) -> None:
         trace = (
@@ -69,8 +71,8 @@ class ExperimentEReporter:
             if expected is not None and predicted is not None
             else None
         )
-        self._result_rows.append(
-            {
+        result_row = {
+                "benchmark_id": case.case_index,
                 "field_name": case.field_profile.field_name,
                 "sample_values": _json(case.field_profile.sample_values),
                 "profiling": _json(trace.profiling.model_dump()),
@@ -93,8 +95,22 @@ class ExperimentEReporter:
                 "reason": prediction.reason,
                 "need_review": prediction.need_review,
             }
-        )
-        self._debug_rows.append(self._semantic_debug_row(case, trace))
+        debug_row = self._semantic_debug_row(case, trace)
+        self._result_rows = [
+            row
+            for row in self._result_rows
+            if str(row.get("benchmark_id")) != str(case.case_index)
+        ]
+        self._debug_rows = [
+            row
+            for row in self._debug_rows
+            if str(row.get("benchmark_id")) != str(case.case_index)
+        ]
+        self._result_rows.append(result_row)
+        self._debug_rows.append(debug_row)
+        assert self.paths is not None
+        _write_csv_atomic(self.paths.results, self._result_rows)
+        _write_csv_atomic(self.paths.semantic_debug, self._debug_rows)
 
     def finalize(self, summary) -> ExperimentEOutputPaths:
         if self.paths is None:
@@ -123,6 +139,7 @@ class ExperimentEReporter:
     @staticmethod
     def _semantic_debug_row(case, trace: SemanticBridgeTrace) -> dict:
         row = {
+            "benchmark_id": case.case_index,
             "field_name": case.field_profile.field_name,
             "samples": _json(case.field_profile.sample_values),
             "profiling": _json(trace.profiling.model_dump()),
@@ -150,6 +167,13 @@ def _json(value) -> str:
 
 def _fieldnames(rows: list[dict]) -> list[str]:
     return list(rows[0]) if rows else []
+
+
+def _read_csv(path: Path) -> list[dict]:
+    if not path.is_file() or path.stat().st_size == 0:
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
 def _write_csv_atomic(path: Path, rows: list[dict]) -> None:

@@ -163,3 +163,36 @@ def test_reporter_writes_three_run_isolated_utf8_bom_artifacts(tmp_path):
     assert payload["metrics"]["tp"] == 1
     assert payload["parameters"]["semantic_top_k"] == 3
 
+
+def test_reporter_persists_each_case_and_replaces_it_when_resumed(tmp_path):
+    summary = _summary()
+    case, result, prediction = _case_result_prediction()
+    parameters = {"semantic_top_k": 3, "regulation_top_k": 3}
+    first = ExperimentEReporter(tmp_path, parameters=parameters)
+
+    first.start_run(summary)
+    first.record_case(case, result, prediction)
+
+    assert first.paths is not None
+    assert first.paths.results.is_file()
+    with first.paths.results.open(encoding="utf-8-sig", newline="") as handle:
+        assert len(list(csv.DictReader(handle))) == 1
+
+    resumed = ExperimentEReporter(tmp_path, parameters=parameters)
+    resumed.start_run(summary)
+    failed = prediction.model_copy(
+        update={
+            "predicted_personal": None,
+            "outcome": "FAILED",
+            "status": "FAILED",
+            "error_message": "RuntimeError",
+        }
+    )
+    resumed.record_case(case, result, failed)
+    resumed.finalize(summary)
+
+    with resumed.paths.results.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["benchmark_id"] == "1"
+    assert rows[0]["status"] == "FAILED"
