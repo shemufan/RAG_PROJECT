@@ -32,6 +32,7 @@ class CSVClassificationPipeline:
         knowledge_base_version: str,
         clock=_utc_now,
         run_id_factory=uuid4,
+        experiment_observer=None,
     ):
         self.target_repository = target_repository
         self.classification_service = classification_service
@@ -39,6 +40,7 @@ class CSVClassificationPipeline:
         self.knowledge_base_version = knowledge_base_version
         self.clock = clock
         self.run_id_factory = run_id_factory
+        self.experiment_observer = experiment_observer
 
     def run(
         self,
@@ -130,10 +132,13 @@ class CSVClassificationPipeline:
         summary: BenchmarkRunSummary,
         cases: list[CSVFieldCase],
     ) -> BenchmarkRunSummary:
+        if self.experiment_observer is not None:
+            self.experiment_observer.start_run(summary)
         for case in cases:
-            self.target_repository.save_prediction(
-                self._classify_case(summary.run_id, case)
-            )
+            prediction, result = self._classify_case(summary.run_id, case)
+            self.target_repository.save_prediction(prediction)
+            if self.experiment_observer is not None:
+                self.experiment_observer.record_case(case, result, prediction)
         metrics = evaluate_predictions(
             self.target_repository.load_metric_inputs(summary.run_id)
         )
@@ -151,15 +156,18 @@ class CSVClassificationPipeline:
             }
         )
         self.target_repository.update_run(finished)
+        if self.experiment_observer is not None:
+            self.experiment_observer.finalize(finished)
         return finished
 
-    def _classify_case(self, run_id, case: CSVFieldCase) -> BenchmarkPrediction:
+    def _classify_case(self, run_id, case: CSVFieldCase):
         profile = case.field_profile
+        result = None
         try:
             result = self.classification_service.classify_field(profile)
             if result.level == "UNKNOWN" or result.is_personal is None:
                 raise RuntimeError("classification returned UNKNOWN")
-            return BenchmarkPrediction(
+            prediction = BenchmarkPrediction(
                 run_id=run_id,
                 benchmark_id=case.case_index,
                 field_name_snapshot=profile.field_name,
@@ -179,7 +187,7 @@ class CSVClassificationPipeline:
                 created_at=self.clock(),
             )
         except Exception as exc:
-            return BenchmarkPrediction(
+            prediction = BenchmarkPrediction(
                 run_id=run_id,
                 benchmark_id=case.case_index,
                 field_name_snapshot=profile.field_name,
@@ -190,3 +198,4 @@ class CSVClassificationPipeline:
                 error_message=type(exc).__name__,
                 created_at=self.clock(),
             )
+        return prediction, result

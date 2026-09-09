@@ -113,6 +113,49 @@ def make_pipeline(target, classifier):
     )
 
 
+def test_pipeline_notifies_optional_experiment_observer():
+    target = FakeTarget()
+    classifier = FakeClassifier({"name": True, "order_no": False})
+    events = []
+
+    class Observer:
+        def start_run(self, summary):
+            events.append(("start", summary.run_id))
+
+        def record_case(self, case, result, prediction):
+            events.append(("case", case.case_index, result.field_name, prediction.outcome))
+
+        def finalize(self, summary):
+            events.append(("final", summary.status))
+
+    pipeline = CSVClassificationPipeline(
+        target,
+        classifier,
+        model_name="fake",
+        knowledge_base_version="v-test",
+        clock=lambda: NOW,
+        run_id_factory=lambda: RUN_ID,
+        experiment_observer=Observer(),
+    )
+
+    source = batch(case(1, "name"), case(2, "order_no"))
+    labels = LabelMatchSummary(
+        label_fingerprint="b" * 64,
+        labeled_cases=2,
+        unlabeled_cases=0,
+        cases=[case(1, "name", True), case(2, "order_no", False)],
+    )
+    summary = pipeline.run(source, labels)
+
+    assert summary.status == "SUCCESS"
+    assert events == [
+        ("start", RUN_ID),
+        ("case", 1, "name", "TP"),
+        ("case", 2, "order_no", "TN"),
+        ("final", "SUCCESS"),
+    ]
+
+
 def test_csv_pipeline_scores_labels_and_marks_unlabeled_results():
     target = FakeTarget()
     classifier = FakeClassifier({"email": True, "price": False})
