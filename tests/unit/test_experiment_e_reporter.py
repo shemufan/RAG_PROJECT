@@ -3,6 +3,8 @@ import json
 from datetime import datetime, timezone
 from uuid import UUID
 
+import pytest
+
 from app.schemas.benchmark import BenchmarkPrediction, BenchmarkRunSummary
 from app.schemas.classification import (
     ClassificationResult,
@@ -196,3 +198,19 @@ def test_reporter_persists_each_case_and_replaces_it_when_resumed(tmp_path):
     assert len(rows) == 1
     assert rows[0]["benchmark_id"] == "1"
     assert rows[0]["status"] == "FAILED"
+
+
+def test_reporter_rejects_resume_with_different_experiment_parameters(tmp_path):
+    summary = _summary()
+    first = ExperimentEReporter(
+        tmp_path,
+        parameters={"semantic_top_k": 3, "regulation_top_k": 3},
+    )
+    first.start_run(summary)
+
+    changed = ExperimentEReporter(
+        tmp_path,
+        parameters={"semantic_top_k": 5, "regulation_top_k": 3},
+    )
+    with pytest.raises(ValueError, match="parameters do not match"):
+        changed.start_run(summary)

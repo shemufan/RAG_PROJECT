@@ -34,6 +34,18 @@ class ExperimentEReporter:
             summary=directory / "experiment_E_summary.json",
             semantic_debug=directory / "semantic_retrieval_debug.csv",
         )
+        if self.paths.summary.is_file():
+            existing = json.loads(
+                self.paths.summary.read_text(encoding="utf-8-sig")
+            )
+            if existing.get("parameters") != self.parameters:
+                raise ValueError("Experiment E resume parameters do not match")
+            metrics = existing.get("metrics", {})
+            for key in ("source_fingerprint", "label_fingerprint"):
+                if metrics.get(key) != getattr(summary, key):
+                    raise ValueError("Experiment E resume input does not match")
+        else:
+            self._write_summary(summary)
         self._result_rows = _read_csv(self.paths.results)
         self._debug_rows = _read_csv(self.paths.semantic_debug)
 
@@ -118,6 +130,11 @@ class ExperimentEReporter:
         assert self.paths is not None
         _write_csv_atomic(self.paths.results, self._result_rows)
         _write_csv_atomic(self.paths.semantic_debug, self._debug_rows)
+        self._write_summary(summary)
+        return self.paths
+
+    def _write_summary(self, summary) -> None:
+        assert self.paths is not None
         payload = {
             "experiment": "E",
             "run_id": str(summary.run_id),
@@ -134,7 +151,6 @@ class ExperimentEReporter:
             self.paths.summary,
             json.dumps(payload, ensure_ascii=False, indent=2),
         )
-        return self.paths
 
     @staticmethod
     def _semantic_debug_row(case, trace: SemanticBridgeTrace) -> dict:
