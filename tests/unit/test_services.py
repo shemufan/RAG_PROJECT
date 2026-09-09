@@ -5,7 +5,7 @@ import pytest
 from langchain_core.documents import Document
 
 from app.rag.prompt import build_classification_prompt
-from app.repositories.vector_store import map_retrieved_document
+from app.repositories.vector_store import VectorStore, map_retrieved_document
 from app.schemas.classification import ClassificationOutput, Evidence
 from app.schemas.field import FieldProfile
 from app.services.classification_service import FieldClassificationService
@@ -53,6 +53,24 @@ def test_vector_result_mapping_preserves_metadata_and_clamps_score():
     assert evidence.article == "第二十八条"
     assert evidence.chunk_id == "chunk-28"
     assert evidence.score == 1.0
+
+
+def test_vector_store_search_raw_preserves_unbounded_score():
+    document = Document(
+        page_content="金融账户属于敏感个人信息。",
+        metadata={"document_name": "个人信息保护法.txt", "chunk_id": "chunk-28"},
+    )
+
+    class FakeStore:
+        def similarity_search_with_relevance_scores(self, query, k):
+            assert query == "金融账户"
+            assert k == 3
+            return [(document, 1.2)]
+
+    store = VectorStore(client=FakeStore())
+
+    assert store.search_raw("金融账户", k=3)[0].raw_score == 1.2
+    assert store.search("金融账户", k=3)[0].score == 1.0
 
 
 def test_embedding_and_llm_services_accept_injected_clients():

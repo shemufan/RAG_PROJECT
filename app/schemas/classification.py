@@ -15,6 +15,13 @@ class Evidence(BaseModel):
     chunk_id: str | None = None
 
 
+class RegulationRetrievalResult(BaseModel):
+    """Regulation evidence paired with the store's unmodified score."""
+
+    evidence: Evidence
+    raw_score: float
+
+
 class ClassificationOutput(BaseModel):
     """Strict structure returned by the language model."""
 

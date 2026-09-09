@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.schemas.classification import Evidence
+from app.schemas.classification import Evidence, RegulationRetrievalResult
 
 
 def map_retrieved_document(document: Any, score: float | None) -> Evidence:
@@ -47,6 +47,22 @@ class VectorStore:
     def search(self, query: str, k: int = 3) -> list[Evidence]:
         rows = self._store.similarity_search_with_relevance_scores(query, k=k)
         return [map_retrieved_document(document, score) for document, score in rows]
+
+    def search_raw(
+        self,
+        query: str,
+        k: int = 3,
+    ) -> list[RegulationRetrievalResult]:
+        """Return evidence plus the exact score emitted by Chroma."""
+
+        rows = self._store.similarity_search_with_relevance_scores(query, k=k)
+        return [
+            RegulationRetrievalResult(
+                evidence=map_retrieved_document(document, score),
+                raw_score=float(score),
+            )
+            for document, score in rows
+        ]
 
     def add_documents(self, documents: list[Any]) -> list[str]:
         return self._store.add_documents(documents)

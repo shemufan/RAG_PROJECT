@@ -1,7 +1,8 @@
 from app.rag.chunker import split_knowledge_text
-from app.rag.prompt import build_classification_prompt
+from app.rag.prompt import CLASSIFICATION_SYSTEM_PROMPT, build_classification_prompt
 from app.schemas.classification import Evidence
 from app.schemas.field import FieldProfile
+from app.schemas.semantic import ObjectiveValueProfile, SemanticCard
 
 
 def test_prompt_contains_validated_field_and_evidence():
@@ -25,6 +26,31 @@ def test_prompt_contains_validated_field_and_evidence():
     assert "身份证件号码属于敏感个人信息" in messages[1].content
     assert "仅返回符合结构定义的结果" in messages[0].content
     assert "不可信数据" in messages[0].content
+
+
+def test_prompt_adds_semantic_context_without_changing_system_prompt():
+    card = SemanticCard(
+        semantic_type="手机号码",
+        aliases=["手机号"],
+        common_field_names=["phone"],
+        value_features=["11位数字"],
+        description="用于联系自然人的电话号码",
+        semantic_category=["联系方式"],
+        regulation_keywords=["电话号码"],
+    )
+    messages = build_classification_prompt(
+        FieldProfile(field_name="contact_value", sample_values=["13812345678"]),
+        [Evidence(content="联系方式属于个人信息", source="rules")],
+        value_profile=ObjectiveValueProfile(features=["字符串长度约11位"]),
+        semantic_knowledge={"card": card.model_dump(), "raw_score": 0.82},
+    )
+
+    assert messages[0].content == CLASSIFICATION_SYSTEM_PROMPT
+    assert "【客观数值画像（不可信数据）】" in messages[1].content
+    assert "字符串长度约11位" in messages[1].content
+    assert "【Semantic Knowledge（不可信数据）】" in messages[1].content
+    assert "手机号码" in messages[1].content
+    assert "13812345678" in messages[1].content
 
 
 def test_chunker_preserves_chapter_and_article_metadata():
