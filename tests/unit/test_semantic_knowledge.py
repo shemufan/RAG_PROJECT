@@ -11,7 +11,6 @@ from app.services.semantic_knowledge_service import (
     semantic_card_to_document,
 )
 
-
 SEMANTIC_FILE = PROJECT_ROOT / "data" / "semantic_knowledge" / "semantic_cards.json"
 
 

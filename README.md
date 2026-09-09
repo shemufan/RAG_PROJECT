@@ -419,6 +419,72 @@ Invoke-RestMethod -Method Post `
 
 [sql/query_examples.sql](sql/query_examples.sql) 提供十类关系查询，包括高敏感字段、表字段分类、等级/类别统计、人工复核、低置信度、法规依据、最近成功任务、按表统计和业务域查询。
 
+## Experiment E：Semantic Bridge RAG
+
+Experiment E 用两个逻辑和物理配置均独立的 Chroma collection 验证
+原始字段与法规文本之间的语义鸿沟：
+
+```text
+Field
+-> 客观 Value Profiling
+-> Semantic KB Top-3
+-> Top-1 semantic_type
+-> Regulation KB Top-3
+-> 现有 LLM
+-> Prediction
+```
+
+E 仅调用 `ValueProfiler.basic_statistics()` 提取长度、字符比例和格式一致性
+等客观事实。它不使用现有 `candidate_types`、正则语义判定或额外 LLM；
+`semantic_type` 只来自 Semantic KB 向量检索的 Top-1 卡片。
+
+Semantic KB 第一版在 `data/semantic_knowledge/semantic_cards.json` 中维护 40 张通用
+字段卡片。卡片包含语义类型、别名、常见字段名、值特征、业务含义、
+语义类别和法规关键词，不包含 benchmark 真实值或标签。首次运行 E 前单独建库：
+
+```powershell
+G:\ANACONDA\develop\envs\rag_env\python.exe -m scripts.rebuild_semantic_knowledge_base
+```
+
+该命令使用与法规库相同的 Embedding 模型，但只重建
+`.runtime/semantic_chroma` 中的 `semantic_field_types` collection，不会重置法规库。
+
+使用同一输入和标签对比 D、B、E：
+
+```powershell
+# D：LLM Only
+G:\ANACONDA\develop\envs\rag_env\python.exe -m scripts.run_csv_pipeline `
+  --experiment D --input "RAG_mini_benchmark_150.csv" `
+  --input-mode catalog --label-column expected_personal
+
+# B：精简 Query + 原法规 RAG
+G:\ANACONDA\develop\envs\rag_env\python.exe -m scripts.run_csv_pipeline `
+  --experiment B --input "RAG_mini_benchmark_150.csv" `
+  --input-mode catalog --label-column expected_personal
+
+# E：Semantic Bridge + 原法规 RAG
+G:\ANACONDA\develop\envs\rag_env\python.exe -m scripts.run_csv_pipeline `
+  --experiment E --input "RAG_mini_benchmark_150.csv" `
+  --input-mode catalog --label-column expected_personal
+```
+
+E 默认 `semantic_top_k=3`，法规 Top-K 固定为与 B 一致的 3。每次新运行的
+文件位于：
+
+```text
+outputs/experiment_E/<run_id>/experiment_E_results.csv
+outputs/experiment_E/<run_id>/experiment_E_summary.json
+outputs/experiment_E/<run_id>/semantic_retrieval_debug.csv
+```
+
+`experiment_E_results.csv` 按样本保存 Profiling、两段 Query、Semantic Top-K、
+法规 Top-K、未裁剪 raw score、预测和 Ground Truth。
+`semantic_retrieval_debug.csv` 保存 Top-1/2/3、分数及 Top1-Top2 gap；由于当前
+数据没有 semantic type Ground Truth，系统不会伪造 Semantic Accuracy。
+
+旧的 `--query-strategy`、`--query-mode`、`--profiling-mode` 和 `--use-rag`
+入口仍然保留；`--experiment A|B|C|D` 只是为已有组合提供可复现的快捷方式。
+
 ## 测试
 
 普通测试不读取真实数据库、LLM、API Key 或本地 Embedding 模型：

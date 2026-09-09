@@ -30,7 +30,12 @@ from app.services.tabular_csv_adapter import TabularCSVAdapter
 EXPERIMENT_PRESETS = {
     "A": {"query_strategy": "legacy", "query_mode": "c", "profiling_mode": "rule", "use_rag": True},
     "B": {"query_strategy": "clean", "query_mode": "c", "profiling_mode": "rule", "use_rag": True},
-    "C": {"query_strategy": "profile", "query_mode": "c", "profiling_mode": "rule", "use_rag": True},
+    "C": {
+        "query_strategy": "profile",
+        "query_mode": "c",
+        "profiling_mode": "rule",
+        "use_rag": True,
+    },
     "D": {"query_strategy": "clean", "query_mode": "c", "profiling_mode": "rule", "use_rag": False},
     "E": {"query_strategy": "clean", "query_mode": "c", "profiling_mode": "rule", "use_rag": True},
 }

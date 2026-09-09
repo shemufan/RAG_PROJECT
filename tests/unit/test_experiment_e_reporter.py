@@ -19,7 +19,6 @@ from app.schemas.semantic import (
 )
 from app.services.experiment_e_reporter import ExperimentEReporter
 
-
 RUN_ID = UUID("12345678-1234-5678-1234-567812345678")
 NOW = datetime(2026, 9, 9, tzinfo=timezone.utc)
 
@@ -121,7 +120,8 @@ def _case_result_prediction():
         status="SUCCESS",
         created_at=NOW,
     )
-    return CSVFieldCase(case_index=1, field_profile=field, expected_personal=True), result, prediction
+    case = CSVFieldCase(case_index=1, field_profile=field, expected_personal=True)
+    return case, result, prediction
 
 
 def test_reporter_writes_three_run_isolated_utf8_bom_artifacts(tmp_path):
