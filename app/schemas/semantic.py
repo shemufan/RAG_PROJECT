@@ -45,3 +45,8 @@ class SemanticRetrievalResult(BaseModel):
     card: SemanticCard
     raw_score: float
 
+
+class ObjectiveValueProfile(BaseModel):
+    """Only observable facts; deliberately has no semantic candidate field."""
+
+    features: list[str] = Field(default_factory=list)
