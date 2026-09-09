@@ -282,6 +282,52 @@ def test_cli_enables_rag_by_default(tmp_path):
     assert parse_args(["--input", str(path)]).use_rag is True
 
 
+@pytest.mark.parametrize(
+    ("experiment", "strategy", "profiling_mode", "use_rag"),
+    [
+        ("A", "legacy", "rule", True),
+        ("B", "clean", "rule", True),
+        ("C", "profile", "rule", True),
+        ("D", "clean", "rule", False),
+        ("E", "clean", "rule", True),
+    ],
+)
+def test_cli_resolves_experiment_presets(
+    tmp_path,
+    experiment,
+    strategy,
+    profiling_mode,
+    use_rag,
+):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    args = parse_args(["--input", str(path), "--experiment", experiment])
+
+    assert args.experiment == experiment
+    assert args.query_strategy == strategy
+    assert args.profiling_mode == profiling_mode
+    assert args.use_rag is use_rag
+    assert args.semantic_top_k == 3
+    assert args.regulation_top_k == 3
+
+
+def test_cli_rejects_flags_that_conflict_with_experiment_e(tmp_path):
+    path = tmp_path / "catalog.csv"
+    write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
+
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--input",
+                str(path),
+                "--experiment",
+                "E",
+                "--no-use-rag",
+            ]
+        )
+
+
 def test_cli_rejects_no_rag_for_non_clean_strategy(tmp_path):
     path = tmp_path / "catalog.csv"
     write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
@@ -427,3 +473,67 @@ def test_build_pipeline_passes_no_rag_to_classifier(monkeypatch):
         "value_profiler": None,
         "use_rag": False,
     }
+
+
+def test_build_pipeline_wires_independent_stores_for_experiment_e(
+    monkeypatch,
+    tmp_path,
+):
+    captured = {"embeddings": []}
+    embedding = object()
+
+    class FakeRegulationStore:
+        def __init__(self, embedding_service, *, settings):
+            captured["embeddings"].append(embedding_service)
+
+        def count(self):
+            return 2
+
+    class FakeSemanticStore:
+        def __init__(self, embedding_service, *, settings):
+            captured["embeddings"].append(embedding_service)
+
+        def count(self):
+            return 33
+
+    class FakeBridgeService:
+        def __init__(self, semantic_store, regulation_store, llm, **kwargs):
+            captured["bridge"] = (semantic_store, regulation_store, llm, kwargs)
+            captured["bridge_instance"] = self
+
+    class FakeReporter:
+        def __init__(self, output_root, *, parameters):
+            captured["reporter"] = (output_root, parameters)
+            captured["reporter_instance"] = self
+
+    monkeypatch.setattr(csv_cli, "EmbeddingService", lambda **kwargs: embedding)
+    monkeypatch.setattr(csv_cli, "VectorStore", FakeRegulationStore)
+    monkeypatch.setattr(csv_cli, "SemanticVectorStore", FakeSemanticStore)
+    monkeypatch.setattr(csv_cli, "SemanticBridgeClassificationService", FakeBridgeService)
+    monkeypatch.setattr(csv_cli, "ExperimentEReporter", FakeReporter)
+    monkeypatch.setattr(csv_cli, "LLMService", lambda **kwargs: "llm")
+    monkeypatch.setattr(csv_cli, "BenchmarkTargetRepository", lambda url: "repository")
+    settings = SimpleNamespace(
+        target_database_url="sqlite://",
+        embedding_model_path="model",
+        deepseek_model="llm-name",
+        knowledge_base_version="kb",
+    )
+
+    pipeline = csv_cli.build_pipeline(
+        settings,
+        experiment="E",
+        semantic_top_k=5,
+        regulation_top_k=3,
+        output_root=tmp_path,
+    )
+
+    assert captured["embeddings"] == [embedding, embedding]
+    assert captured["bridge"][3] == {
+        "semantic_top_k": 5,
+        "regulation_top_k": 3,
+    }
+    assert captured["reporter"][0] == tmp_path
+    assert captured["reporter"][1]["use_extra_semantic_llm"] is False
+    assert pipeline.classification_service is captured["bridge_instance"]
+    assert pipeline.experiment_observer is captured["reporter_instance"]

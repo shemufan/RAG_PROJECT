@@ -2,11 +2,13 @@
 
 import argparse
 from collections.abc import Sequence
+from pathlib import Path
 from uuid import UUID
 
 from app.core.config import load_settings
 from app.rag.retrieval_query import ProfileQueryMode, QueryStrategy
 from app.repositories.benchmark_target import BenchmarkTargetRepository
+from app.repositories.semantic_vector_store import SemanticVectorStore
 from app.repositories.vector_store import VectorStore
 from app.schemas.csv_input import CSVInputBatch, LabelMatchSummary
 from app.services.benchmark_label_service import (
@@ -19,9 +21,19 @@ from app.services.csv_mode_detector import resolve_csv_mode
 from app.services.csv_pipeline import CSVClassificationPipeline
 from app.services.csv_reader import CSVInputError, CSVReader
 from app.services.embedding_service import EmbeddingService
+from app.services.experiment_e_reporter import ExperimentEReporter
 from app.services.llm_service import LLMService
 from app.services.llm_value_profiler import LLMValueProfiler, ProfilingMode
+from app.services.semantic_bridge_service import SemanticBridgeClassificationService
 from app.services.tabular_csv_adapter import TabularCSVAdapter
+
+EXPERIMENT_PRESETS = {
+    "A": {"query_strategy": "legacy", "query_mode": "c", "profiling_mode": "rule", "use_rag": True},
+    "B": {"query_strategy": "clean", "query_mode": "c", "profiling_mode": "rule", "use_rag": True},
+    "C": {"query_strategy": "profile", "query_mode": "c", "profiling_mode": "rule", "use_rag": True},
+    "D": {"query_strategy": "clean", "query_mode": "c", "profiling_mode": "rule", "use_rag": False},
+    "E": {"query_strategy": "clean", "query_mode": "c", "profiling_mode": "rule", "use_rag": True},
+}
 
 
 def _positive_integer(value: str) -> int:
@@ -54,35 +66,60 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-run", type=UUID)
     parser.add_argument("--retry-failed", action="store_true")
     parser.add_argument(
+        "--experiment",
+        choices=tuple(EXPERIMENT_PRESETS),
+        help="optional reproducible experiment preset A, B, C, D, or E",
+    )
+    parser.add_argument(
         "--query-strategy",
         choices=("legacy", "clean", "profile"),
-        default="profile",
+        default=None,
         help="retrieval Query strategy; use the same value when resuming a run",
     )
     parser.add_argument(
         "--query-mode",
         choices=("c", "c1", "c2"),
-        default="c",
+        default=None,
         help="profile Query submode: c=full, c1=features only, c2=candidates only",
     )
     parser.add_argument(
         "--profiling-mode",
         choices=("rule", "llm"),
-        default="rule",
+        default=None,
         help="Value Profiling implementation; use the same value when resuming",
     )
     parser.add_argument(
         "--use-rag",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help="include retrieved Evidence in final classification",
     )
+    parser.add_argument("--semantic-top-k", type=_positive_integer, default=3)
+    parser.add_argument("--regulation-top-k", type=_positive_integer, default=3)
+    parser.add_argument("--output-root", type=Path, default=Path("outputs"))
     return parser
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.experiment:
+        preset = EXPERIMENT_PRESETS[args.experiment]
+        for name, expected in preset.items():
+            supplied = getattr(args, name)
+            if supplied is not None and supplied != expected:
+                parser.error(
+                    f"--experiment {args.experiment} conflicts with explicit {name}={supplied}"
+                )
+            setattr(args, name, expected)
+    else:
+        args.query_strategy = args.query_strategy or "profile"
+        args.query_mode = args.query_mode or "c"
+        args.profiling_mode = args.profiling_mode or "rule"
+        if args.use_rag is None:
+            args.use_rag = True
+    if args.experiment == "E" and args.regulation_top_k != 3:
+        parser.error("--experiment E keeps regulation Top-K fixed at 3 like B")
     if args.retry_failed and args.resume_run is None:
         parser.error("--retry-failed requires --resume-run")
     if (args.field_name_column or args.sample_columns) and args.input_mode != "catalog":
@@ -162,6 +199,10 @@ def build_pipeline(
     profile_query_mode: ProfileQueryMode = "c",
     profiling_mode: ProfilingMode = "rule",
     use_rag: bool = True,
+    experiment: str | None = None,
+    semantic_top_k: int = 3,
+    regulation_top_k: int = 3,
+    output_root: str | Path = "outputs",
 ) -> CSVClassificationPipeline:
     if not settings.target_database_url:
         raise SystemExit("TARGET_DATABASE_URL is not configured")
@@ -171,22 +212,53 @@ def build_pipeline(
         raise SystemExit(
             "knowledge base is empty; run python -m scripts.rebuild_knowledge_base"
         )
-    value_profiler = (
-        LLMValueProfiler(settings=settings) if profiling_mode == "llm" else None
-    )
-    classifier = FieldClassificationService(
-        vector_store,
-        LLMService(settings=settings),
-        query_strategy=query_strategy,
-        profile_query_mode=profile_query_mode,
-        value_profiler=value_profiler,
-        use_rag=use_rag,
-    )
+    llm_service = LLMService(settings=settings)
+    experiment_observer = None
+    if experiment == "E":
+        semantic_store = SemanticVectorStore(embedding_service, settings=settings)
+        if semantic_store.count() == 0:
+            raise SystemExit(
+                "Semantic KB is empty; run python -m scripts.rebuild_semantic_knowledge_base"
+            )
+        classifier = SemanticBridgeClassificationService(
+            semantic_store,
+            vector_store,
+            llm_service,
+            semantic_top_k=semantic_top_k,
+            regulation_top_k=regulation_top_k,
+        )
+        parameters = {
+            "experiment": "E",
+            "use_rag": True,
+            "use_profiling": True,
+            "use_semantic_bridge": True,
+            "semantic_top_k": semantic_top_k,
+            "use_regulation_rag": True,
+            "regulation_top_k": regulation_top_k,
+            "use_extra_semantic_llm": False,
+        }
+        experiment_observer = ExperimentEReporter(
+            output_root,
+            parameters=parameters,
+        )
+    else:
+        value_profiler = (
+            LLMValueProfiler(settings=settings) if profiling_mode == "llm" else None
+        )
+        classifier = FieldClassificationService(
+            vector_store,
+            llm_service,
+            query_strategy=query_strategy,
+            profile_query_mode=profile_query_mode,
+            value_profiler=value_profiler,
+            use_rag=use_rag,
+        )
     return CSVClassificationPipeline(
         BenchmarkTargetRepository(settings.target_database_url),
         classifier,
         model_name=settings.deepseek_model,
         knowledge_base_version=settings.knowledge_base_version,
+        experiment_observer=experiment_observer,
     )
 
 
@@ -228,6 +300,10 @@ def main() -> None:
         args.query_mode,
         args.profiling_mode,
         use_rag=args.use_rag,
+        experiment=args.experiment,
+        semantic_top_k=args.semantic_top_k,
+        regulation_top_k=args.regulation_top_k,
+        output_root=args.output_root,
     )
     if args.resume_run is None:
         summary = pipeline.run(batch, labels)
