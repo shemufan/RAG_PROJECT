@@ -1,0 +1,2 @@
+# Frozen snapshot checksums are calculated over UTF-8 bytes with LF newlines.
+data/knowledge_snapshots/** text eol=lf

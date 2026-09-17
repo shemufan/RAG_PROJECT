@@ -152,11 +152,11 @@ def test_cli_accepts_query_strategy(tmp_path, strategy: str):
     assert args.query_strategy == strategy
 
 
-def test_cli_defaults_query_strategy_to_profile(tmp_path):
+def test_cli_defaults_query_strategy_to_clean(tmp_path):
     path = tmp_path / "catalog.csv"
     write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
 
-    assert parse_args(["--input", str(path)]).query_strategy == "profile"
+    assert parse_args(["--input", str(path)]).query_strategy == "clean"
 
 
 def test_cli_rejects_unknown_query_strategy(tmp_path):
@@ -223,7 +223,9 @@ def test_cli_accepts_profiling_mode(tmp_path, mode: str):
     path = tmp_path / "catalog.csv"
     write_csv(path, [["字段名", "样本1"], ["email", "a***@x.test"]])
 
-    args = parse_args(["--input", str(path), "--profiling-mode", mode])
+    args = parse_args(
+        ["--input", str(path), "--query-strategy", "profile", "--profiling-mode", mode]
+    )
 
     assert args.profiling_mode == mode
 
@@ -428,7 +430,7 @@ def test_build_pipeline_keeps_rule_profiler_as_default(monkeypatch):
     csv_cli.build_pipeline(settings)
 
     assert captured == {
-        "query_strategy": "profile",
+        "query_strategy": "clean",
         "profile_query_mode": "c",
         "value_profiler": None,
         "use_rag": True,

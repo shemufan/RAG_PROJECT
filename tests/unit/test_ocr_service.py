@@ -202,6 +202,9 @@ class FakeImageService:
             return self.pages
         return [self.pages[number - 1] for number in page_numbers]
 
+    def tile_ocr_image(self, page_path):
+        return [page_path]
+
 
 class FakeCompletions:
     def __init__(self, outputs, *, error_at=None, error=None):
@@ -258,7 +261,7 @@ def test_cache_miss_renders_pages_and_returns_ordered_qwen_output(tmp_path):
     assert len(completions.calls) == 2
 
 
-def test_qwen_request_uses_base64_image_and_legal_prompt(tmp_path):
+def test_qwen_request_uses_base64_image_and_model_default_ocr_prompt(tmp_path):
     pdf = tmp_path / "law.pdf"
     write_pdf(pdf)
     page = write_page_images(tmp_path, 1)[0]
@@ -270,13 +273,12 @@ def test_qwen_request_uses_base64_image_and_legal_prompt(tmp_path):
     request = completions.calls[0]
     assert request["model"] == "qwen3.5-ocr"
     content = request["messages"][0]["content"]
+    assert len(content) == 1
     assert content[0]["type"] == "image_url"
     data_url = content[0]["image_url"]["url"]
     assert data_url.startswith("data:image/jpeg;base64,")
     assert base64.b64decode(data_url.split(",", 1)[1]) == page.read_bytes()
-    assert content[1]["type"] == "text"
-    assert "不要总结" in content[1]["text"]
-    assert "章节" in content[1]["text"]
+    assert content[0]["max_pixels"] == 32 * 32 * 8192
 
 
 def test_text_cache_hit_skips_rendering_and_api(tmp_path):
@@ -451,3 +453,82 @@ def test_qwen_error_does_not_leak_credentials_or_image_data(tmp_path):
     )
     assert "test-api-key" not in rendered_traceback
     assert "secret-image" not in rendered_traceback
+
+
+def test_extract_pdf_pages_returns_page_provenance(tmp_path):
+    pdf = tmp_path / "新标准.pdf"
+    write_pdf(pdf, pages=2)
+    pages = write_page_images(tmp_path, 2)
+    completions = FakeCompletions(["第一页内容", "第二页内容"])
+    service = make_transport_service(
+        tmp_path,
+        FakeImageService(pages),
+        completions,
+    )
+
+    extracted = service.extract_pdf_pages(pdf)
+
+    assert [page.page_number for page in extracted] == [1, 2]
+    assert [page.extraction_method for page in extracted] == ["ocr", "ocr"]
+    assert [page.text for page in extracted] == ["第一页内容", "第二页内容"]
+
+
+def test_segmented_page_is_ocrd_in_order_and_reports_segment_on_failure(tmp_path):
+    pdf = tmp_path / "long-page.pdf"
+    write_pdf(pdf)
+    original = write_page_images(tmp_path, 1)[0]
+    segment_dir = tmp_path / "segments"
+    segment_dir.mkdir()
+    segments = write_page_images(segment_dir, 2)
+
+    class SegmentingImageService(FakeImageService):
+        def segment_page_image(self, page_path):
+            assert page_path == original
+            return segments
+
+    completions = FakeCompletions(["片段一", "片段二"])
+    service = make_transport_service(
+        tmp_path,
+        SegmentingImageService([original]),
+        completions,
+    )
+
+    extracted = service.extract_pdf_pages(pdf)
+
+    assert extracted[0].text == "片段一\n片段二"
+    assert extracted[0].segment_count == 2
+
+    cached = service.extract_pdf_pages(pdf)
+    assert cached[0].segment_count == 2
+    assert len(completions.calls) == 2
+
+    failing = make_transport_service(
+        tmp_path / "failure",
+        SegmentingImageService([original]),
+        FakeCompletions(["片段一"], error_at=2),
+    )
+    with pytest.raises(OCRExtractionError, match="page 1 segment 2"):
+        failing.extract_pdf_pages(pdf)
+
+
+def test_html_wrapped_ocr_output_is_normalized_without_rewriting_text(tmp_path):
+    pdf = tmp_path / "diagram.pdf"
+    write_pdf(pdf)
+    page = write_page_images(tmp_path, 1)[0]
+    completions = FakeCompletions(
+        [
+            "```html\n<html><body><p>B.1 原文内容</p>"
+            '<div class="image"><img src="attachment://figure.png"/></div>'
+            "<p>B.2 标题</p></body></html>\n```"
+        ]
+    )
+    service = make_transport_service(
+        tmp_path,
+        FakeImageService([page]),
+        completions,
+    )
+
+    extracted = service.extract_pdf_pages(pdf)
+
+    assert extracted[0].text == "B.1 原文内容\nB.2 标题"
+    assert len(completions.calls) == 1

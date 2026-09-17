@@ -134,7 +134,7 @@ def test_classification_service_uses_profiled_query_and_keeps_llm_prompt():
             need_review=False,
         )
     )
-    service = FieldClassificationService(store, llm)
+    service = FieldClassificationService(store, llm, query_strategy="profile")
     profile = FieldProfile(
         source_system="csv",
         database_name="csv_source",

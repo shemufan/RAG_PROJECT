@@ -24,7 +24,7 @@ class FieldClassificationService:
         vector_store,
         llm_service,
         *,
-        query_strategy: QueryStrategy = "profile",
+        query_strategy: QueryStrategy = "clean",
         profile_query_mode: ProfileQueryMode = "c",
         value_profiler: ValueProfilerProtocol | None = None,
         query_builder: QueryBuilder | None = None,

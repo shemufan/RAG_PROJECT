@@ -3,7 +3,12 @@ from pathlib import Path
 import pytest
 
 from app.rag.chunker import split_knowledge_text
-from app.services.knowledge_service import load_knowledge_documents
+from app.schemas.knowledge_quality import ExtractedPage, QualityStatus
+from app.services.knowledge_service import (
+    KnowledgeQualityError,
+    load_knowledge_documents,
+    prepare_knowledge_documents,
+)
 
 
 class FakeOCRService:
@@ -61,3 +66,62 @@ def test_chunker_records_explicit_pdf_source_format():
 
     assert chunks[0].metadata["document_name"] == "新标准.pdf"
     assert chunks[0].metadata["source_format"] == "pdf"
+
+
+def test_prepare_pipeline_cleans_validates_then_splits_pdf(tmp_path: Path):
+    laws = tmp_path / "laws"
+    laws.mkdir()
+    pdf = laws / "standard.pdf"
+    pdf.write_bytes(b"fake pdf handled by injected OCR")
+
+    class PageOCR:
+        def extract_pdf_pages(self, path):
+            assert path == pdf
+            return [
+                ExtractedPage(
+                    page_number=1,
+                    extraction_method="ocr",
+                    text="GB/T 00000—2026\n1 范围\n正文",
+                ),
+                ExtractedPage(
+                    page_number=2,
+                    extraction_method="ocr",
+                    text="GB/T 00000—2026\n2 要求\n处理者应保护数据",
+                ),
+            ]
+
+    prepared = prepare_knowledge_documents(
+        tmp_path,
+        version="clean-v1",
+        ocr_service=PageOCR(),
+    )
+
+    assert prepared.reports[0].status is QualityStatus.PASS
+    assert len(prepared.documents) == 2
+    assert all("GB/T 00000—2026" not in doc.page_content for doc in prepared.documents)
+    assert prepared.documents[0].metadata["page_start"] == 1
+    assert "source_sha256" in prepared.documents[0].metadata
+
+
+def test_loader_rejects_document_that_fails_quality_gate(tmp_path: Path):
+    laws = tmp_path / "laws"
+    laws.mkdir()
+    pdf = laws / "broken.pdf"
+    pdf.write_bytes(b"fake pdf handled by injected OCR")
+
+    class EmptyPageOCR:
+        def extract_pdf_pages(self, path):
+            return [
+                ExtractedPage(
+                    page_number=1,
+                    extraction_method="ocr",
+                    text="",
+                )
+            ]
+
+    with pytest.raises(KnowledgeQualityError, match="broken.pdf"):
+        load_knowledge_documents(
+            tmp_path,
+            version="clean-v1",
+            ocr_service=EmptyPageOCR(),
+        )

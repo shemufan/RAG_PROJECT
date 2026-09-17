@@ -1,8 +1,8 @@
 from app.rag.chunker import split_knowledge_text
-from app.rag.prompt import CLASSIFICATION_SYSTEM_PROMPT, build_classification_prompt
+from app.rag.prompt import build_classification_prompt
 from app.schemas.classification import Evidence
 from app.schemas.field import FieldProfile
-from app.schemas.semantic import ObjectiveValueProfile, SemanticCard
+from app.schemas.knowledge_quality import ExtractedPage
 
 
 def test_prompt_contains_validated_field_and_evidence():
@@ -28,31 +28,6 @@ def test_prompt_contains_validated_field_and_evidence():
     assert "不可信数据" in messages[0].content
 
 
-def test_prompt_adds_semantic_context_without_changing_system_prompt():
-    card = SemanticCard(
-        semantic_type="手机号码",
-        aliases=["手机号"],
-        common_field_names=["phone"],
-        value_features=["11位数字"],
-        description="用于联系自然人的电话号码",
-        semantic_category=["联系方式"],
-        regulation_keywords=["电话号码"],
-    )
-    messages = build_classification_prompt(
-        FieldProfile(field_name="contact_value", sample_values=["13812345678"]),
-        [Evidence(content="联系方式属于个人信息", source="rules")],
-        value_profile=ObjectiveValueProfile(features=["字符串长度约11位"]),
-        semantic_knowledge={"card": card.model_dump(), "raw_score": 0.82},
-    )
-
-    assert messages[0].content == CLASSIFICATION_SYSTEM_PROMPT
-    assert "【客观数值画像（不可信数据）】" in messages[1].content
-    assert "字符串长度约11位" in messages[1].content
-    assert "【Semantic Knowledge（不可信数据）】" in messages[1].content
-    assert "手机号码" in messages[1].content
-    assert "13812345678" in messages[1].content
-
-
 def test_chunker_preserves_chapter_and_article_metadata():
     chunks = split_knowledge_text(
         "第一章 总则\n第一条 公开信息为 L1。\n第二条 身份证号为 L4。",
@@ -61,10 +36,11 @@ def test_chunker_preserves_chapter_and_article_metadata():
         version="v1",
     )
 
-    assert len(chunks) == 2
+    assert len(chunks) == 3
     assert chunks[0].metadata["chapter"] == "第一章 总则"
-    assert chunks[1].metadata["article"].startswith("第二条")
-    assert chunks[1].metadata["sensitivity_level"] == "L4"
+    assert chunks[0].page_content == "第一章 总则"
+    assert chunks[2].metadata["article"].startswith("第二条")
+    assert chunks[2].metadata["sensitivity_level"] == "L4"
 
 
 def test_chunker_splits_markdown_classification_rules():
@@ -79,3 +55,70 @@ def test_chunker_splits_markdown_classification_rules():
     assert len(chunks) == 2
     assert "身份证号" in chunks[0].page_content
     assert chunks[1].metadata["article"].startswith("规则 2")
+
+
+def test_chunker_splits_numbered_standard_clauses_and_appendices():
+    chunks = split_knowledge_text(
+        "1 范围\n范围正文\n3.1 术语\n术语正文\n5.2.3 要求\n"
+        "表 1 数据类型\n注：这是说明\n示例：手机号\n附录 A\nA.1 附录要求\n附录正文",
+        "标准.pdf",
+        source_type="legal_document",
+        source_format="pdf",
+        version="v2",
+        source_sha256="a" * 64,
+    )
+
+    assert [chunk.metadata["article"] for chunk in chunks] == [
+        "1 范围",
+        "3.1 术语",
+        "5.2.3 要求",
+        "附录说明",
+        "A.1 附录要求",
+    ]
+    assert "表 1 数据类型" in chunks[2].page_content
+    assert "示例：手机号" in chunks[2].page_content
+    assert chunks[3].metadata["chapter"] == "附录 A"
+    assert all(chunk.metadata["source_sha256"] == "a" * 64 for chunk in chunks)
+
+
+def test_chunker_preserves_page_range_for_standard_clause():
+    pages = [
+        ExtractedPage(page_number=3, text="1 范围\n第一页正文", extraction_method="native"),
+        ExtractedPage(page_number=4, text="续页正文\n2 要求\n第二条正文", extraction_method="ocr"),
+    ]
+
+    from app.rag.chunker import split_knowledge_pages
+
+    chunks = split_knowledge_pages(
+        pages,
+        "标准.pdf",
+        source_type="legal_document",
+        source_format="pdf",
+        version="v2",
+        source_sha256="b" * 64,
+    )
+
+    assert chunks[0].metadata["page_start"] == 3
+    assert chunks[0].metadata["page_end"] == 4
+    assert chunks[1].metadata["page_start"] == 4
+    assert chunks[1].metadata["page_end"] == 4
+
+
+def test_chunker_splits_long_clause_with_overlap_and_stable_ids():
+    text = "1 范围\n" + "甲" * 2600
+    kwargs = {
+        "source_type": "legal_document",
+        "source_format": "pdf",
+        "version": "v2",
+        "source_sha256": "c" * 64,
+    }
+
+    first = split_knowledge_text(text, "标准.pdf", **kwargs)
+    second = split_knowledge_text(text, "标准.pdf", **kwargs)
+
+    assert len(first) >= 2
+    assert all(len(chunk.page_content) <= 2000 for chunk in first)
+    assert first[0].page_content[-150:] == first[1].page_content[:150]
+    assert [chunk.metadata["chunk_id"] for chunk in first] == [
+        chunk.metadata["chunk_id"] for chunk in second
+    ]

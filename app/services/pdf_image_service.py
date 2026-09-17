@@ -7,10 +7,15 @@ from pathlib import Path
 from uuid import uuid4
 
 import pypdfium2 as pdfium
+from PIL import Image
 
 MANIFEST_NAME = ".pdf-pages.json"
 RENDER_VERSION = "pdfium-jpeg-v1"
+PAGE_SEGMENT_VERSION = "projection-gutter-tile-v3"
 PAGE_NAME_PATTERN = re.compile(r"page-\d{4}\.jpg")
+LONG_PAGE_ASPECT_RATIO = 2.2
+MIN_GUTTER_RATIO = 0.02
+MAX_GUTTER_INK_RATIO = 0.01
 
 
 class PdfImageRenderError(RuntimeError):
@@ -80,6 +85,135 @@ class PdfImageService:
             return [self._page_path(output_dir, number) for number in requested]
         finally:
             document.close()
+
+    def segment_page_image(self, page_path: str | Path) -> list[Path]:
+        """Split an unusually tall scan at reliable horizontal white gutters."""
+        path = Path(page_path)
+        with Image.open(path) as source:
+            image = source.convert("RGB")
+        try:
+            width, height = image.size
+            if height / max(width, 1) < LONG_PAGE_ASPECT_RATIO:
+                return [path]
+            grayscale = image.convert("L")
+            row_means = list(
+                grayscale.resize(
+                    (1, height),
+                    resample=Image.Resampling.BOX,
+                ).get_flattened_data()
+            )
+            blank_rows = [
+                (255 - value) / 255 <= MAX_GUTTER_INK_RATIO for value in row_means
+            ]
+            minimum_gutter = max(4, round(width * MIN_GUTTER_RATIO))
+            candidates = self._gutter_centers(blank_rows, minimum_gutter)
+            cuts = self._select_page_gutters(candidates, width, height)
+            if not cuts:
+                return [path]
+
+            boundaries = [0, *cuts, height]
+            segments = []
+            for index, (top, bottom) in enumerate(
+                zip(boundaries, boundaries[1:]),
+                start=1,
+            ):
+                if bottom - top < minimum_gutter * 2:
+                    return [path]
+                output = path.with_name(f"{path.stem}-segment-{index:04d}.jpg")
+                image.crop((0, top, width, bottom)).save(
+                    output,
+                    format="JPEG",
+                    quality=self.jpeg_quality,
+                    optimize=True,
+                )
+                segments.append(output)
+            return segments
+        finally:
+            image.close()
+
+    def tile_ocr_image(self, page_path: str | Path) -> list[Path]:
+        """Split one physical page at a central whitespace band for safer OCR."""
+        path = Path(page_path)
+        with Image.open(path) as source:
+            image = source.convert("RGB")
+        try:
+            width, height = image.size
+            if height / max(width, 1) < 1.1:
+                return [path]
+            grayscale = image.convert("L")
+            row_means = list(
+                grayscale.resize(
+                    (1, height),
+                    resample=Image.Resampling.BOX,
+                ).get_flattened_data()
+            )
+            blank_rows = [
+                (255 - value) / 255 <= MAX_GUTTER_INK_RATIO for value in row_means
+            ]
+            minimum_gutter = max(4, round(width * MIN_GUTTER_RATIO))
+            candidates = self._gutter_centers(blank_rows, minimum_gutter)
+            candidates = [
+                value for value in candidates if height * 0.3 <= value <= height * 0.7
+            ]
+            if not candidates:
+                return [path]
+            boundary = min(candidates, key=lambda value: abs(value - height / 2))
+            outputs = []
+            for index, (top, bottom) in enumerate(
+                ((0, boundary), (boundary, height)),
+                start=1,
+            ):
+                output = path.with_name(f"{path.stem}-tile-{index:04d}.jpg")
+                image.crop((0, top, width, bottom)).save(
+                    output,
+                    format="JPEG",
+                    quality=self.jpeg_quality,
+                    optimize=True,
+                )
+                outputs.append(output)
+            return outputs
+        finally:
+            image.close()
+
+    @staticmethod
+    def _gutter_centers(blank_rows: list[bool], minimum_length: int) -> list[int]:
+        centers = []
+        start = None
+        for index, is_blank in enumerate([*blank_rows, False]):
+            if is_blank and start is None:
+                start = index
+            elif not is_blank and start is not None:
+                if (
+                    start > 0
+                    and index < len(blank_rows)
+                    and index - start >= minimum_length
+                ):
+                    centers.append((start + index) // 2)
+                start = None
+        return centers
+
+    @staticmethod
+    def _select_page_gutters(candidates: list[int], width: int, height: int) -> list[int]:
+        """Choose page-sized boundaries instead of paragraph whitespace."""
+        selected = []
+        previous = 0
+        target_height = width * 1.414
+        minimum_height = width * 0.75
+        maximum_height = width * 2.2
+        while height - previous > maximum_height:
+            choices = [
+                value
+                for value in candidates
+                if minimum_height <= value - previous <= maximum_height
+                and height - value >= minimum_height
+            ]
+            if not choices:
+                return []
+            target = previous + target_height
+            boundary = min(choices, key=lambda value: abs(value - target))
+            selected.append(boundary)
+            previous = boundary
+        return selected
 
     def _expected_manifest(self, path: Path, page_count: int) -> dict:
         return {

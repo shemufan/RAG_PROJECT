@@ -2,6 +2,9 @@
 
 import base64
 import hashlib
+import json
+import re
+from html.parser import HTMLParser
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,24 +12,83 @@ from PIL import Image
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
-from app.services.pdf_image_service import PdfImageRenderError, PdfImageService
+from app.schemas.knowledge_quality import ExtractedPage
+from app.services.pdf_image_service import (
+    PAGE_SEGMENT_VERSION,
+    PdfImageRenderError,
+    PdfImageService,
+)
 
 MAX_PDF_BYTES = 100 * 1024 * 1024
 MAX_PDF_PAGES = 50
 MAX_BASE64_IMAGE_BYTES = 10 * 1024 * 1024
 MIN_NATIVE_TEXT_CHARACTERS = 5
 MIN_IMAGE_INK_RATIO = 0.0005
-OCR_PROMPT_VERSION = "legal-hybrid-page-v3"
-LEGAL_OCR_PROMPT = (
-    "完整提取该法规页面中的所有文字，严格保持原始阅读顺序，并保留标题、章节、"
-    "条款编号和自然段。不要总结、解释、改写或补充内容；无法辨认的字符使用 ? 表示。"
-)
+OCR_PROMPT_VERSION = "model-default-page-v7"
 INVALID_OUTPUT_MARKERS = (
     "没有可供提取",
     "未提供法规文档",
     "未提供文档",
     "无法提取",
 )
+RETRYABLE_FORMAT_MARKERS = ("```html", "<html", "<body", "</html>")
+STRICT_OCR_PROMPT = (
+    "上一次输出包含了格式代码或推断内容，不符合逐字转录要求。请仅输出图像中清晰可见的"
+    "原文纯文本，禁止输出 HTML 或 Markdown，禁止推断、解释、扩写或补充。图示只转录"
+    "图中实际可见的文字标签；无法辨认的字符使用 ? 表示。"
+)
+
+_HTML_TAG = re.compile(r"</?[a-z][^>]*>", re.IGNORECASE)
+_BLOCK_TAGS = {
+    "address",
+    "article",
+    "blockquote",
+    "br",
+    "caption",
+    "div",
+    "figcaption",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "li",
+    "p",
+    "section",
+    "table",
+    "td",
+    "th",
+    "tr",
+}
+
+
+class _VisibleTextHTMLParser(HTMLParser):
+    """Collect visible text while discarding only markup and embedded resources."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._ignored_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        del attrs
+        if tag in {"script", "style"}:
+            self._ignored_depth += 1
+        elif tag == "br":
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self._ignored_depth:
+            self._ignored_depth -= 1
+        elif tag in _BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_depth:
+            self.parts.append(data)
 
 
 class OCRExtractionError(RuntimeError):
@@ -76,6 +138,23 @@ class QwenOCRService:
         self._write_cache(cache_path, text)
         return text
 
+    def extract_pdf_pages(self, path: str | Path) -> list[ExtractedPage]:
+        """Return ordered page-level text with extraction provenance."""
+        pdf_path = Path(path)
+        self._validate_pdf(pdf_path)
+        if self._extractor is not None:
+            text = self._extractor(pdf_path).strip()
+            if not text:
+                raise OCRExtractionError(f"{pdf_path.name}: OCR returned empty text")
+            return [
+                ExtractedPage(
+                    page_number=1,
+                    text=text,
+                    extraction_method="custom",
+                )
+            ]
+        return self._extract_with_qwen_pages(pdf_path)
+
     def _validate_pdf(self, path: Path) -> None:
         if not path.is_file():
             raise OCRExtractionError(f"{path.name}: PDF file does not exist")
@@ -103,6 +182,7 @@ class QwenOCRService:
         digest.update(path.read_bytes())
         digest.update(self.model.encode("utf-8"))
         digest.update(OCR_PROMPT_VERSION.encode("utf-8"))
+        digest.update(PAGE_SEGMENT_VERSION.encode("utf-8"))
         return digest.hexdigest()
 
     def _page_cache_path(self, path: Path, page_number: int) -> Path:
@@ -112,6 +192,10 @@ class QwenOCRService:
     def _blank_cache_path(self, path: Path, page_number: int) -> Path:
         digest = self._cache_digest(path)[:20]
         return self.cache_dir / f"blank-{digest}-{page_number:04d}.flag"
+
+    def _page_metadata_path(self, path: Path, page_number: int) -> Path:
+        digest = self._cache_digest(path)[:20]
+        return self.cache_dir / f"page-{digest}-{page_number:04d}.json"
 
     def _write_cache(self, cache_path: Path, text: str) -> None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,18 +207,40 @@ class QwenOCRService:
             temporary.unlink(missing_ok=True)
 
     def _extract_with_qwen(self, path: Path) -> str:
+        pages = self._extract_with_qwen_pages(path)
+        return "\n\n".join(
+            f"【第 {page.page_number} 页】\n{page.text}"
+            for page in pages
+            if page.text
+        )
+
+    def _extract_with_qwen_pages(self, path: Path) -> list[ExtractedPage]:
         native_pages = self._extract_native_pages(path)
-        extracted: dict[int, str] = {}
+        extracted: dict[int, ExtractedPage] = {}
         pages_requiring_images = []
         for page_number, native_text in enumerate(native_pages, start=1):
             if self._native_text_is_usable(native_text):
-                extracted[page_number] = native_text.strip()
+                extracted[page_number] = ExtractedPage(
+                    page_number=page_number,
+                    text=native_text.strip(),
+                    extraction_method="native",
+                )
                 continue
-            page_cache = self._read_page_cache(path, page_number)
+            page_cache, segment_count = self._read_page_cache_record(path, page_number)
             if page_cache:
-                extracted[page_number] = page_cache
+                extracted[page_number] = ExtractedPage(
+                    page_number=page_number,
+                    text=page_cache,
+                    extraction_method="ocr_cache",
+                    segment_count=segment_count,
+                )
             elif self._blank_cache_path(path, page_number).is_file():
-                extracted[page_number] = ""
+                extracted[page_number] = ExtractedPage(
+                    page_number=page_number,
+                    text="",
+                    extraction_method="blank_check",
+                    is_blank=True,
+                )
             else:
                 pages_requiring_images.append(page_number)
 
@@ -167,21 +273,58 @@ class QwenOCRService:
                         self._blank_cache_path(path, page_number),
                         "blank",
                     )
-                    extracted[page_number] = ""
+                    extracted[page_number] = ExtractedPage(
+                        page_number=page_number,
+                        text="",
+                        extraction_method="blank_check",
+                        is_blank=True,
+                    )
                     continue
-                page_text = self._extract_page(path.name, page_number, page_path)
+                segmenter = getattr(
+                    self._image_service,
+                    "segment_page_image",
+                    lambda candidate: [candidate],
+                )
+                segments = segmenter(page_path)
+                tiler = getattr(
+                    self._image_service,
+                    "tile_ocr_image",
+                    lambda candidate: [candidate],
+                )
+                ocr_images = [
+                    tile
+                    for segment in segments
+                    for tile in tiler(segment)
+                ]
+                segment_texts = []
+                for segment_number, segment_path in enumerate(ocr_images, start=1):
+                    segment_texts.append(
+                        self._extract_page(
+                            path.name,
+                            page_number,
+                            segment_path,
+                            segment_number=(
+                                segment_number if len(ocr_images) > 1 else None
+                            ),
+                        )
+                    )
+                page_text = "\n".join(segment_texts)
                 self._write_cache(
                     self._page_cache_path(path, page_number),
                     page_text,
                 )
-                extracted[page_number] = page_text
+                self._write_cache(
+                    self._page_metadata_path(path, page_number),
+                    json.dumps({"segment_count": len(ocr_images)}),
+                )
+                extracted[page_number] = ExtractedPage(
+                    page_number=page_number,
+                    text=page_text,
+                    extraction_method="ocr",
+                    segment_count=len(ocr_images),
+                )
 
-        ordered = []
-        for page_number in range(1, len(native_pages) + 1):
-            page_text = extracted[page_number]
-            if page_text:
-                ordered.append(f"【第 {page_number} 页】\n{page_text}")
-        return "\n\n".join(ordered)
+        return [extracted[number] for number in range(1, len(native_pages) + 1)]
 
     @staticmethod
     def _extract_native_pages(path: Path) -> list[str]:
@@ -202,14 +345,26 @@ class QwenOCRService:
         return visible.count("\ufffd") / len(visible) < 0.05
 
     def _read_page_cache(self, path: Path, page_number: int) -> str:
+        return self._read_page_cache_record(path, page_number)[0]
+
+    def _read_page_cache_record(self, path: Path, page_number: int) -> tuple[str, int]:
         cache_path = self._page_cache_path(path, page_number)
         try:
-            text = cache_path.read_text(encoding="utf-8").strip()
+            text = self._normalize_ocr_output(
+                cache_path.read_text(encoding="utf-8")
+            )
         except (OSError, UnicodeDecodeError):
-            return ""
-        if any(marker in text for marker in INVALID_OUTPUT_MARKERS):
-            return ""
-        return text
+            return "", 1
+        if self._output_is_invalid(text):
+            return "", 1
+        try:
+            metadata = json.loads(
+                self._page_metadata_path(path, page_number).read_text(encoding="utf-8")
+            )
+            segment_count = max(1, int(metadata.get("segment_count", 1)))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            segment_count = 1
+        return text, segment_count
 
     @staticmethod
     def _image_is_blank(path: Path) -> bool:
@@ -228,43 +383,88 @@ class QwenOCRService:
         document_name: str,
         page_number: int,
         page_path: Path,
+        segment_number: int | None = None,
     ) -> str:
+        location = f"page {page_number}"
+        if segment_number is not None:
+            location += f" segment {segment_number}"
         encoded = base64.b64encode(page_path.read_bytes())
         if len(encoded) > MAX_BASE64_IMAGE_BYTES:
             raise OCRExtractionError(
-                f"{document_name}: page {page_number} exceeds the 10 MB Base64 limit"
+                f"{document_name}: {location} exceeds the 10 MB Base64 limit"
             )
         data_url = f"data:image/jpeg;base64,{encoded.decode('ascii')}"
-        try:
-            completions = self._get_chat_client().chat.completions
-            response = completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": data_url},
-                            },
-                            {"type": "text", "text": LEGAL_OCR_PROMPT},
-                        ],
-                    }
-                ],
+        for prompt in (None, STRICT_OCR_PROMPT):
+            content_parts = []
+            if prompt is not None:
+                content_parts.append({"type": "text", "text": prompt})
+            content_parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": data_url},
+                    "max_pixels": 32 * 32 * 8192,
+                }
             )
-            content = response.choices[0].message.content
-        except Exception as exc:
-            raise OCRExtractionError(
-                f"{document_name}: Qwen OCR request failed on page {page_number} "
-                f"({type(exc).__name__})"
-            ) from None
+            try:
+                completions = self._get_chat_client().chat.completions
+                response = completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": content_parts,
+                        }
+                    ],
+                )
+                content = response.choices[0].message.content
+            except Exception as exc:
+                raise OCRExtractionError(
+                    f"{document_name}: Qwen OCR request failed on {location} "
+                    f"({type(exc).__name__})"
+                ) from None
 
-        text = content.strip() if isinstance(content, str) else ""
-        if not text or any(marker in text for marker in INVALID_OUTPUT_MARKERS):
-            raise OCRExtractionError(
-                f"{document_name}: page {page_number} returned empty or invalid OCR text"
-            )
-        return text
+            raw_text = content.strip() if isinstance(content, str) else ""
+            text = self._normalize_ocr_output(raw_text)
+            if text and not self._output_is_invalid(text):
+                return text
+            if not any(
+                marker in raw_text.lower() for marker in RETRYABLE_FORMAT_MARKERS
+            ):
+                break
+        raise OCRExtractionError(
+            f"{document_name}: {location} returned empty or invalid OCR text"
+        )
+
+    @staticmethod
+    def _output_is_invalid(text: str) -> bool:
+        lowered = text.lower()
+        return any(marker in text for marker in INVALID_OUTPUT_MARKERS) or any(
+            marker in lowered for marker in RETRYABLE_FORMAT_MARKERS
+        )
+
+    @staticmethod
+    def _normalize_ocr_output(text: str) -> str:
+        """Remove response wrappers without changing visible OCR wording."""
+        stripped = text.strip()
+        if stripped.lower().startswith("```html"):
+            stripped = stripped[7:].lstrip("\r\n")
+            if stripped.endswith("```"):
+                stripped = stripped[:-3].rstrip()
+        if not _HTML_TAG.search(stripped):
+            return stripped
+
+        parser = _VisibleTextHTMLParser()
+        try:
+            parser.feed(stripped)
+            parser.close()
+        except ValueError:
+            return stripped
+        lines = []
+        for line in "".join(parser.parts).splitlines():
+            normalized = " ".join(line.split())
+            if normalized:
+                lines.append(normalized)
+        return "\n".join(lines)
 
     def _get_chat_client(self):
         if self._chat_client is None:

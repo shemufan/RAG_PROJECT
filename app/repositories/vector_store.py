@@ -23,7 +23,7 @@ def map_retrieved_document(document: Any, score: float | None) -> Evidence:
 class VectorStore:
     """Store and retrieve regulatory knowledge in one Chroma collection."""
 
-    def __init__(self, embedding_service=None, *, client=None, settings=None):
+    def __init__(self, embedding_service=None, *, client=None, settings=None, collection_name=None):
         if client is not None:
             self._store = client
             return
@@ -38,8 +38,9 @@ class VectorStore:
             raise ValueError("embedding_service 不能为空")
         self._embedding_function = embedding_service.get_embeddings()
         self._settings = settings
+        self._collection_name = collection_name or settings.chroma_collection
         self._store = Chroma(
-            collection_name=settings.chroma_collection,
+            collection_name=self._collection_name,
             persist_directory=str(settings.chroma_db_dir),
             embedding_function=self._embedding_function,
         )
@@ -75,7 +76,7 @@ class VectorStore:
         from langchain_chroma import Chroma
 
         self._store = Chroma(
-            collection_name=self._settings.chroma_collection,
+            collection_name=self._collection_name,
             persist_directory=str(self._settings.chroma_db_dir),
             embedding_function=self._embedding_function,
         )

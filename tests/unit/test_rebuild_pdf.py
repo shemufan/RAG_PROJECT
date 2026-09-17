@@ -35,6 +35,9 @@ class RecordingStore:
     def add_documents(self, documents):
         self.documents.extend(documents)
 
+    def count(self):
+        return len(self.documents)
+
 
 def settings_for(tmp_path: Path, *, api_key="test-key", base_url="https://test/v1"):
     return SimpleNamespace(
@@ -102,3 +105,29 @@ def test_build_ocr_service_uses_local_pdf_image_renderer(tmp_path):
     service = build_ocr_service(settings_for(tmp_path))
 
     assert isinstance(service._image_service, PdfImageService)
+
+
+def test_successful_candidate_rebuild_never_resets_store(tmp_path):
+    laws = tmp_path / "laws"
+    laws.mkdir()
+    (laws / "law.txt").write_text("第一条 文本法规", encoding="utf-8")
+    store = RecordingStore()
+
+    count = rebuild_knowledge_base(settings_for(tmp_path), vector_store=store)
+
+    assert count == 1
+    assert store.reset_called is False
+    assert len(store.documents) == 1
+
+
+def test_candidate_rebuild_rejects_nonempty_collection(tmp_path):
+    laws = tmp_path / "laws"
+    laws.mkdir()
+    (laws / "law.txt").write_text("第一条 文本法规", encoding="utf-8")
+    store = RecordingStore()
+    store.documents.append(object())
+
+    with pytest.raises(RuntimeError, match="candidate collection.*empty"):
+        rebuild_knowledge_base(settings_for(tmp_path), vector_store=store)
+
+    assert store.reset_called is False

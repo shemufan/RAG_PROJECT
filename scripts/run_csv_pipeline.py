@@ -118,7 +118,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 )
             setattr(args, name, expected)
     else:
-        args.query_strategy = args.query_strategy or "profile"
+        args.query_strategy = args.query_strategy or "clean"
         args.query_mode = args.query_mode or "c"
         args.profiling_mode = args.profiling_mode or "rule"
         if args.use_rag is None:
@@ -200,7 +200,7 @@ def apply_limit(
 
 def build_pipeline(
     settings,
-    query_strategy: QueryStrategy = "profile",
+    query_strategy: QueryStrategy = "clean",
     profile_query_mode: ProfileQueryMode = "c",
     profiling_mode: ProfilingMode = "rule",
     use_rag: bool = True,

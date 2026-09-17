@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from PIL import Image, ImageDraw
 from pypdf import PdfWriter
 
 from app.services.pdf_image_service import PdfImageService
@@ -84,3 +85,90 @@ def test_render_pages_prunes_images_not_requested_by_current_extraction(tmp_path
     assert pages == [output_dir / "page-0002.jpg"]
     assert not (output_dir / "page-0001.jpg").exists()
     assert not (output_dir / "page-0003.jpg").exists()
+
+
+def test_segment_page_image_splits_abnormal_long_image_at_white_gutters(tmp_path):
+    page = tmp_path / "page-0001.jpg"
+    image = Image.new("RGB", (120, 720), "white")
+    draw = ImageDraw.Draw(image)
+    for top in (20, 260, 500):
+        draw.rectangle((10, top, 110, top + 160), fill="black")
+    image.save(page, format="JPEG", quality=100)
+    image.close()
+
+    segments = PdfImageService().segment_page_image(page)
+
+    assert [item.name for item in segments] == [
+        "page-0001-segment-0001.jpg",
+        "page-0001-segment-0002.jpg",
+        "page-0001-segment-0003.jpg",
+    ]
+    assert all(item.is_file() for item in segments)
+
+
+def test_segment_page_image_keeps_normal_page_unchanged(tmp_path):
+    page = tmp_path / "page-0001.jpg"
+    Image.new("RGB", (200, 280), "black").save(page, format="JPEG")
+
+    assert PdfImageService().segment_page_image(page) == [page]
+
+
+def test_segment_page_image_does_not_guess_without_reliable_gutters(tmp_path):
+    page = tmp_path / "page-0001.jpg"
+    Image.new("RGB", (100, 500), "black").save(page, format="JPEG")
+
+    assert PdfImageService().segment_page_image(page) == [page]
+
+
+def test_segment_page_image_ignores_small_internal_whitespace_runs(tmp_path):
+    page = tmp_path / "page-0001.jpg"
+    image = Image.new("RGB", (100, 600), "white")
+    draw = ImageDraw.Draw(image)
+    for page_top in (0, 150, 300, 450):
+        for offset in (10, 55, 100):
+            draw.rectangle(
+                (8, page_top + offset, 92, page_top + offset + 25),
+                fill="black",
+            )
+    image.save(page, format="JPEG", quality=100)
+    image.close()
+
+    segments = PdfImageService().segment_page_image(page)
+
+    assert len(segments) == 4
+
+
+def test_segment_page_image_detects_narrow_gutters_in_very_long_scan(tmp_path):
+    page = tmp_path / "page-0001.jpg"
+    image = Image.new("RGB", (100, 600), "white")
+    draw = ImageDraw.Draw(image)
+    for page_top in (0, 150, 300, 450):
+        draw.rectangle((5, page_top + 2, 95, page_top + 145), fill="black")
+    image.save(page, format="JPEG", quality=100)
+    image.close()
+
+    assert len(PdfImageService().segment_page_image(page)) == 4
+
+
+def test_tile_ocr_image_splits_page_at_central_white_band(tmp_path):
+    page = tmp_path / "page-0001-segment-0001.jpg"
+    image = Image.new("RGB", (200, 300), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((10, 10, 190, 120), fill="black")
+    draw.rectangle((10, 180, 190, 290), fill="black")
+    image.save(page, format="JPEG", quality=100)
+    image.close()
+
+    tiles = PdfImageService().tile_ocr_image(page)
+
+    assert [tile.name for tile in tiles] == [
+        "page-0001-segment-0001-tile-0001.jpg",
+        "page-0001-segment-0001-tile-0002.jpg",
+    ]
+
+
+def test_tile_ocr_image_keeps_page_when_center_has_no_safe_gap(tmp_path):
+    page = tmp_path / "page-0001.jpg"
+    Image.new("RGB", (200, 300), "black").save(page, format="JPEG")
+
+    assert PdfImageService().tile_ocr_image(page) == [page]
