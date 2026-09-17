@@ -42,12 +42,10 @@ def main():
 
     settings = get_settings()
     collection = f"data_classification__{manifest['version']}"
-    if collection == settings.chroma_collection:
-        raise ValueError("restore to an inactive candidate collection")
     store = VectorStore(EmbeddingService(model_path=settings.embedding_model_path),
                         settings=settings, collection_name=collection)
     count = KnowledgeService(store).rebuild(documents)
-    print(f"Restored {count} chunks to {collection}; active collection unchanged")
+    print(f"Restored {count} chunks to {collection}; deployment configuration unchanged")
 
 
 if __name__ == "__main__":

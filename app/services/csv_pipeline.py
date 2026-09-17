@@ -32,7 +32,6 @@ class CSVClassificationPipeline:
         knowledge_base_version: str,
         clock=_utc_now,
         run_id_factory=uuid4,
-        experiment_observer=None,
     ):
         self.target_repository = target_repository
         self.classification_service = classification_service
@@ -40,7 +39,6 @@ class CSVClassificationPipeline:
         self.knowledge_base_version = knowledge_base_version
         self.clock = clock
         self.run_id_factory = run_id_factory
-        self.experiment_observer = experiment_observer
 
     def run(
         self,
@@ -82,6 +80,11 @@ class CSVClassificationPipeline:
         summary = self.target_repository.get_run(run_id)
         if summary is None or summary.source_type != "csv":
             raise ValueError("CSV benchmark run not found")
+        if (
+            summary.model_name != self.model_name
+            or summary.knowledge_base_version != self.knowledge_base_version
+        ):
+            raise ValueError("resume classification configuration does not match original run")
         cases = self._select_cases(batch, labels)
         label_fingerprint = labels.label_fingerprint if labels else None
         if (
@@ -90,6 +93,10 @@ class CSVClassificationPipeline:
             or summary.label_fingerprint != label_fingerprint
         ):
             raise ValueError("resume input does not match the original run")
+
+        if len(cases) < summary.total_cases:
+            raise ValueError("resume case range does not match the original run")
+        cases = cases[:summary.total_cases]
 
         recorded = self.target_repository.list_recorded_case_snapshots(run_id)
         selected = []
@@ -132,13 +139,9 @@ class CSVClassificationPipeline:
         summary: BenchmarkRunSummary,
         cases: list[CSVFieldCase],
     ) -> BenchmarkRunSummary:
-        if self.experiment_observer is not None:
-            self.experiment_observer.start_run(summary)
         for case in cases:
-            prediction, result = self._classify_case(summary.run_id, case)
+            prediction = self._classify_case(summary.run_id, case)
             self.target_repository.save_prediction(prediction)
-            if self.experiment_observer is not None:
-                self.experiment_observer.record_case(case, result, prediction)
         metrics = evaluate_predictions(
             self.target_repository.load_metric_inputs(summary.run_id)
         )
@@ -156,13 +159,10 @@ class CSVClassificationPipeline:
             }
         )
         self.target_repository.update_run(finished)
-        if self.experiment_observer is not None:
-            self.experiment_observer.finalize(finished)
         return finished
 
     def _classify_case(self, run_id, case: CSVFieldCase):
         profile = case.field_profile
-        result = None
         try:
             result = self.classification_service.classify_field(profile)
             if result.level == "UNKNOWN" or result.is_personal is None:
@@ -198,4 +198,4 @@ class CSVClassificationPipeline:
                 error_message=type(exc).__name__,
                 created_at=self.clock(),
             )
-        return prediction, result
+        return prediction

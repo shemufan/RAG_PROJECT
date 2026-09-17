@@ -1,9 +1,26 @@
+# Local tests and development records
+/tests/
+/docs/superpowers/
+/docs/PROJECT_REVIEW_*.md
+
+# Python caches and verification output
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+
+# Packaging artifacts
+/build/
+/dist/
+*.egg-info/
 
 .venv/
 venv/
@@ -16,12 +33,18 @@ venv/
 .idea/
 .agents/
 .claude/
+.codex/
 .gradio/
 
 .runtime/
 .worktrees/
 outputs/
 logs/
+*.log
+*.tmp
+*.bak
+*.swp
+*~
 
 data/knowledge/laws/*/page-*.jpg
 data/knowledge/laws/*/.pdf-pages.json

@@ -19,7 +19,7 @@ async def app_lifespan(application: FastAPI) -> AsyncIterator[None]:
     vector_store = VectorStore(embedding_service, settings=settings)
     if vector_store.count() == 0:
         raise RuntimeError(
-            "知识库为空，请先运行 python -m scripts.rebuild_knowledge_base"
+            "知识库为空，请按 docs/RAG_FREEZE.md 恢复冻结库并配置 CHROMA_COLLECTION"
         )
     application.state.classification_service = FieldClassificationService(
         vector_store,

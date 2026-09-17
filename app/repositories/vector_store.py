@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.schemas.classification import Evidence, RegulationRetrievalResult
+from app.schemas.classification import Evidence
 
 
 def map_retrieved_document(document: Any, score: float | None) -> Evidence:
@@ -36,47 +36,19 @@ class VectorStore:
             settings = get_settings()
         if embedding_service is None:
             raise ValueError("embedding_service 不能为空")
-        self._embedding_function = embedding_service.get_embeddings()
-        self._settings = settings
-        self._collection_name = collection_name or settings.chroma_collection
         self._store = Chroma(
-            collection_name=self._collection_name,
+            collection_name=collection_name or settings.chroma_collection,
             persist_directory=str(settings.chroma_db_dir),
-            embedding_function=self._embedding_function,
+            embedding_function=embedding_service.get_embeddings(),
         )
 
     def search(self, query: str, k: int = 3) -> list[Evidence]:
         rows = self._store.similarity_search_with_relevance_scores(query, k=k)
         return [map_retrieved_document(document, score) for document, score in rows]
 
-    def search_raw(
-        self,
-        query: str,
-        k: int = 3,
-    ) -> list[RegulationRetrievalResult]:
-        """Return evidence plus the exact score emitted by Chroma."""
-
-        rows = self._store.similarity_search_with_relevance_scores(query, k=k)
-        return [
-            RegulationRetrievalResult(
-                evidence=map_retrieved_document(document, score),
-                raw_score=float(score),
-            )
-            for document, score in rows
-        ]
 
     def add_documents(self, documents: list[Any]) -> list[str]:
         return self._store.add_documents(documents)
 
     def count(self) -> int:
         return self._store._collection.count()
-
-    def reset(self) -> None:
-        self._store.delete_collection()
-        from langchain_chroma import Chroma
-
-        self._store = Chroma(
-            collection_name=self._collection_name,
-            persist_directory=str(self._settings.chroma_db_dir),
-            embedding_function=self._embedding_function,
-        )

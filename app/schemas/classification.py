@@ -4,12 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.semantic import (
-    ObjectiveValueProfile,
-    SemanticCard,
-    SemanticRetrievalResult,
-)
-
 
 class Evidence(BaseModel):
     """One knowledge passage supporting a classification."""
@@ -19,29 +13,6 @@ class Evidence(BaseModel):
     article: str | None = None
     score: float | None = Field(default=None, ge=0.0, le=1.0)
     chunk_id: str | None = None
-
-
-class RegulationRetrievalResult(BaseModel):
-    """Regulation evidence paired with the store's unmodified score."""
-
-    evidence: Evidence
-    raw_score: float
-
-
-class SemanticBridgeTrace(BaseModel):
-    """Internal layer-by-layer trace exported by Experiment E."""
-
-    profiling: ObjectiveValueProfile = Field(default_factory=ObjectiveValueProfile)
-    semantic_query: str = ""
-    semantic_retrieval: list[SemanticRetrievalResult] = Field(default_factory=list)
-    selected_semantic_type: str | None = None
-    selected_card: SemanticCard | None = None
-    top1_top2_score_gap: float | None = None
-    regulation_query: str = ""
-    regulation_retrieval: list[RegulationRetrievalResult] = Field(
-        default_factory=list
-    )
-    failed_stage: str | None = None
 
 
 class ClassificationOutput(BaseModel):
@@ -69,7 +40,6 @@ class ClassificationResult(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     need_review: bool
     decision_path: str
-    experiment_trace: SemanticBridgeTrace | None = Field(default=None, exclude=True)
 
 
 class ClassifyResponse(BaseModel):

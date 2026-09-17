@@ -88,7 +88,8 @@ def build_pipeline(settings) -> CSVClassificationPipeline:
     vector_store = VectorStore(embedding_service, settings=settings)
     if vector_store.count() == 0:
         raise SystemExit(
-            "knowledge base is empty; run python -m scripts.rebuild_knowledge_base"
+            "knowledge base is empty; restore and configure the frozen collection "
+            "as described in docs/RAG_FREEZE.md"
         )
     classifier = FieldClassificationService(
         vector_store,

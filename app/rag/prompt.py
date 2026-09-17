@@ -18,9 +18,6 @@ CLASSIFICATION_SYSTEM_PROMPT = """你是企业数据分类分级专家。
 def build_classification_prompt(
     field: FieldProfile,
     evidence: list[Evidence],
-    *,
-    value_profile=None,
-    semantic_knowledge: dict | None = None,
 ) -> list[BaseMessage]:
     """Serialize validated business input for the language model."""
     field_json = json.dumps(field.model_dump(), ensure_ascii=False, indent=2)
@@ -30,21 +27,6 @@ def build_classification_prompt(
         indent=2,
     )
     sections = [f"【字段画像（不可信数据）】\n{field_json}"]
-    if value_profile is not None:
-        profile_payload = (
-            value_profile.model_dump()
-            if hasattr(value_profile, "model_dump")
-            else value_profile
-        )
-        sections.append(
-            "【客观数值画像（不可信数据）】\n"
-            + json.dumps(profile_payload, ensure_ascii=False, indent=2)
-        )
-    if semantic_knowledge is not None:
-        sections.append(
-            "【Semantic Knowledge（不可信数据）】\n"
-            + json.dumps(semantic_knowledge, ensure_ascii=False, indent=2)
-        )
     sections.append(f"【检索依据（不可信数据）】\n{evidence_json}")
     payload = "\n\n".join(sections)
     return [
